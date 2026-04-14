@@ -14,7 +14,6 @@ go.work.sum
 
 # Output directories
 findings/
-*.md
 
 # Environment
 .env
