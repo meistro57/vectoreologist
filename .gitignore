@@ -1,0 +1,39 @@
+# Binaries
+vectoreologist
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Go workspace
+go.work
+go.work.sum
+
+# Output directories
+findings/
+*.md
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Old Python artifacts (from initial exploration)
+venv/
+__pycache__/
+*.py[cod]
+*.tsv
+*.json
+qdrant-edge-demo/
