@@ -6,89 +6,136 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
+	"time"
 
 	"github.com/meistro57/vectoreologist/internal/models"
+)
+
+const (
+	defaultModel = "deepseek-reasoner" // full R1 chain-of-thought
+	callTimeout  = 5 * time.Minute     // R1 can be slow; give it room
 )
 
 type Reasoner struct {
 	apiURL string
 	apiKey string
+	model  string
 	client *http.Client
 }
 
 func New(apiURL, apiKey string) *Reasoner {
+	return New2(apiURL, apiKey, defaultModel)
+}
+
+func New2(apiURL, apiKey, model string) *Reasoner {
 	return &Reasoner{
 		apiURL: apiURL,
 		apiKey: apiKey,
-		client: &http.Client{},
+		model:  model,
+		client: &http.Client{Timeout: callTimeout},
 	}
 }
 
-// ReasonAboutTopology uses DeepSeek R1 to analyze vector topology
+// ReasonAboutTopology uses DeepSeek to analyze vector topology.
+// It reasons about every cluster, the top 10 bridges by strength,
+// and the top 5 moats by distance.
 func (r *Reasoner) ReasonAboutTopology(
 	clusters []models.Cluster,
 	bridges []models.Bridge,
 	moats []models.Moat,
 ) []models.Finding {
 	findings := []models.Finding{}
+	total := len(clusters)
 
-	// Reason about each cluster
+	sort.Slice(bridges, func(i, j int) bool { return bridges[i].Strength > bridges[j].Strength })
+	if len(bridges) > 10 {
+		bridges = bridges[:10]
+	}
+	sort.Slice(moats, func(i, j int) bool { return moats[i].Distance > moats[j].Distance })
+	if len(moats) > 5 {
+		moats = moats[:5]
+	}
+	total += len(bridges) + len(moats)
+
+	done := 0
+
+	logThinking := func(subject, thinking string) {
+		if thinking == "" {
+			return
+		}
+		fmt.Printf("\n\n   --- thinking: %s ---\n%s\n   ---\n", subject, thinking)
+	}
+
+	// Clusters
 	for _, cluster := range clusters {
-		prompt := buildClusterPrompt(cluster)
-		reasoning, err := r.callDeepSeek(prompt)
+		done++
+		subject := fmt.Sprintf("Cluster %d: %s", cluster.ID, cluster.Label)
+		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
+		resp, err := r.callDeepSeek(buildClusterPrompt(cluster))
 		if err != nil {
-			fmt.Printf("Warning: Failed to reason about cluster %d: %v\n", cluster.ID, err)
+			fmt.Printf("\n   Warning: cluster %d: %v\n", cluster.ID, err)
 			continue
 		}
-
+		logThinking(subject, resp.thinking)
 		findings = append(findings, models.Finding{
 			Type:           "cluster_analysis",
-			Subject:        fmt.Sprintf("Cluster %d", cluster.ID),
-			ReasoningChain: reasoning,
+			Subject:        subject,
+			ReasoningChain: formatForReport(resp),
 			Confidence:     0.75,
 			IsAnomaly:      cluster.Coherence < 0.5,
 		})
 	}
 
-	// Reason about bridges
+	// Top bridges
 	for _, bridge := range bridges {
-		prompt := buildBridgePrompt(bridge)
-		reasoning, err := r.callDeepSeek(prompt)
+		done++
+		subject := fmt.Sprintf("Bridge: %d ↔ %d", bridge.ClusterA, bridge.ClusterB)
+		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
+		resp, err := r.callDeepSeek(buildBridgePrompt(bridge))
 		if err != nil {
 			continue
 		}
-
+		logThinking(subject, resp.thinking)
 		findings = append(findings, models.Finding{
 			Type:           "bridge_analysis",
-			Subject:        fmt.Sprintf("Bridge: %d ↔ %d", bridge.ClusterA, bridge.ClusterB),
-			ReasoningChain: reasoning,
+			Subject:        subject,
+			ReasoningChain: formatForReport(resp),
 			Confidence:     0.75,
 		})
 	}
 
-	// Reason about moats
+	// Top moats
 	for _, moat := range moats {
-		prompt := buildMoatPrompt(moat)
-		reasoning, err := r.callDeepSeek(prompt)
+		done++
+		subject := fmt.Sprintf("Moat: %d ⊥ %d", moat.ClusterA, moat.ClusterB)
+		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
+		resp, err := r.callDeepSeek(buildMoatPrompt(moat))
 		if err != nil {
 			continue
 		}
-
+		logThinking(subject, resp.thinking)
 		findings = append(findings, models.Finding{
 			Type:           "moat_analysis",
-			Subject:        fmt.Sprintf("Moat: %d ⊥ %d", moat.ClusterA, moat.ClusterB),
-			ReasoningChain: reasoning,
+			Subject:        subject,
+			ReasoningChain: formatForReport(resp),
 			Confidence:     0.75,
 			IsAnomaly:      true,
 		})
 	}
 
+	fmt.Printf("\r   ✓ reasoning complete (%d/%d)                              \n", done, total)
 	return findings
 }
 
-func (r *Reasoner) callDeepSeek(prompt string) (string, error) {
+type deepSeekResponse struct {
+	thinking   string
+	conclusion string
+}
+
+func (r *Reasoner) callDeepSeek(prompt string) (*deepSeekResponse, error) {
 	reqBody := map[string]interface{}{
-		"model": "deepseek-reasoner",
+		"model": r.model,
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
@@ -102,17 +149,39 @@ func (r *Reasoner) callDeepSeek(prompt string) (string, error) {
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	var result map[string]interface{}
-	json.Unmarshal(body, &result)
 
-	choices := result["choices"].([]interface{})
-	message := choices[0].(map[string]interface{})["message"].(map[string]interface{})
-	return message["content"].(string), nil
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("bad JSON response: %w", err)
+	}
+
+	choices, ok := result["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return nil, fmt.Errorf("no choices in response: %s", string(body))
+	}
+	msg, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected message format")
+	}
+
+	conclusion, _ := msg["content"].(string)
+	thinking, _   := msg["reasoning_content"].(string)
+
+	return &deepSeekResponse{thinking: thinking, conclusion: conclusion}, nil
+}
+
+// formatForReport combines the visible thinking chain and conclusion into the
+// markdown stored in the report.
+func formatForReport(r *deepSeekResponse) string {
+	if r.thinking != "" {
+		return fmt.Sprintf("**Thinking:**\n%s\n\n**Conclusion:**\n%s", r.thinking, r.conclusion)
+	}
+	return r.conclusion
 }
 
 func buildClusterPrompt(cluster models.Cluster) string {
@@ -125,7 +194,7 @@ Cluster Details:
 - Density: %.2f
 - Coherence: %.2f
 
-What semantic concept does this cluster represent? Provide visible reasoning.`, 
+In 2-3 sentences: what semantic concept does this cluster represent?`,
 		cluster.ID, cluster.Label, cluster.Size, cluster.Density, cluster.Coherence)
 }
 
@@ -135,14 +204,16 @@ func buildBridgePrompt(bridge models.Bridge) string {
 Strength: %.2f (%s)
 Connecting: Cluster %d ↔ Cluster %d
 
-Why does this connection exist?`, bridge.Strength, bridge.LinkType, bridge.ClusterA, bridge.ClusterB)
+In 1-2 sentences: why does this connection exist?`,
+		bridge.Strength, bridge.LinkType, bridge.ClusterA, bridge.ClusterB)
 }
 
 func buildMoatPrompt(moat models.Moat) string {
-	return fmt.Sprintf(`Analyze this knowledge moat (isolation):
+	return fmt.Sprintf(`Analyze this knowledge moat (isolation) between vector clusters:
 
 Distance: %.2f
 Isolated: Cluster %d ⊥ Cluster %d
 
-Why is there no semantic connection?`, moat.Distance, moat.ClusterA, moat.ClusterB)
+In 1-2 sentences: why is there no semantic connection?`,
+		moat.Distance, moat.ClusterA, moat.ClusterB)
 }

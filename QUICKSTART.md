@@ -1,54 +1,74 @@
 # Vectoreologist Quickstart
 
-## Setup
+## 1. Prerequisites
 
-1. **Install Go 1.23+**
+**Go 1.23+**
 ```bash
-# Check version
 go version
 ```
 
-2. **Clone and setup**
+**Python 3.10+ with ML dependencies**
 ```bash
-cd ~/Vectoreologist
-make deps
+pip install umap-learn hdbscan numpy
 ```
 
-3. **Configure environment**
-```bash
-cp .env.example .env
-# Edit .env with your DeepSeek API key
-```
-
-4. **Ensure Qdrant is running**
+**Qdrant running**
 ```bash
 docker ps | grep qdrant
 # If not running:
 docker run -d -p 6333:6333 qdrant/qdrant
 ```
 
-## First Excavation
+---
+
+## 2. Clone & Build
 
 ```bash
-# Build
+git clone https://github.com/meistro57/vectoreologist.git
+cd vectoreologist
+make deps
 make build
-
-# Run on your KAE chunks (5000 vector sample)
-./vectoreologist \
-  --collection kae_chunks \
-  --sample 5000 \
-  --output ./findings
-
-# Or use make shortcuts:
-make excavate     # kae_chunks
-make meta         # kae_meta_graph
-make history      # marks_gpt_history
-make forum        # qmu_forum
+./vectoreologist --version
 ```
 
-## Understanding Output
+---
 
-### Console Output
+## 3. Configure
+
+Create a `.env` file — it's loaded automatically at startup:
+
+```bash
+cat > .env << 'EOF'
+DEEPSEEK_API_KEY=your_key_here
+QDRANT_URL=http://localhost:6333
+EOF
+```
+
+No DeepSeek key? The tool still runs — Phase 4 reasoning is skipped and you still get topology + anomaly findings.
+
+---
+
+## 4. First Excavation
+
+```bash
+./vectoreologist --collection kae_chunks --sample 5000
+```
+
+Or via make shortcuts:
+
+```bash
+make excavate   # kae_chunks, 5000 vectors
+make meta       # kae_meta_graph, 100 vectors
+make history    # marks_gpt_history, 2000 vectors
+make forum      # qmu_forum, 300 vectors
+```
+
+---
+
+## 5. Understanding the Output
+
+### Console
+
 ```
 🏺 Vectoreologist - Excavating kae_chunks from http://localhost:6333
 
@@ -56,139 +76,126 @@ make forum        # qmu_forum
    ✓ Extracted 5000 vectors with metadata
 
 🗺️  Phase 2: Topology Analysis
-   ✓ Identified 23 concept clusters
-   ✓ Found 15 domain bridges
-   ✓ Detected 8 knowledge moats
+   ℹ 1224/5000 vectors classified as noise
+   ✓ Identified 22 concept clusters
+   ✓ Found 205 domain bridges
+   ✓ Detected 0 knowledge moats
 
 ⚠️  Phase 3: Anomaly Detection
-   ✓ Found 3 cluster anomalies
-   ✓ Found 2 orphaned clusters
-   ✓ Found 1 source contradictions
+   ✓ Found 11 cluster anomalies
+   ✓ Found 0 orphaned clusters
+   ✓ Found 0 source contradictions
 
 🧠 Phase 4: DeepSeek R1 Reasoning
-   ✓ Generated 46 reasoning chains
-   ✓ Total findings: 52
+   reasoning 1/32: Cluster 1: surface / kae_chunks ...
+
+   --- thinking: Cluster 1: surface / kae_chunks ---
+   Let me work through what this cluster represents...
+   The density of 0.73 and coherence of 0.91 suggest tight grouping...
+   ---
+
+   reasoning 2/32: Cluster 2: deep / kae_meta_graph ...
+   ...
+   ✓ reasoning complete (32/32)
 
 📝 Phase 5: Synthesis & Storage
-   ✓ Report written to ./findings/vectoreology_2025-04-14_22-30-15.md
+   ✓ Report written to findings/vectoreology_2026-04-14_21-27-41.md
    ✓ Findings stored in vectoreology_findings collection
 
 ✨ Excavation Complete
 
 Key Insights:
-  • 23 semantic concepts discovered
-  • 15 domain connections mapped
-  • 8 knowledge gaps identified
-  • 6 anomalies flagged for investigation
+  • 22 semantic concepts discovered
+  • 205 domain connections mapped
+  • 0 knowledge gaps identified
+  • 11 anomalies flagged for investigation
 
-Read full analysis: ./findings/vectoreology_2025-04-14_22-30-15.md
+Read full analysis: findings/vectoreology_2026-04-14_21-27-41.md
 ```
+
+**Noise vectors**: HDBSCAN naturally excludes outliers that don't belong to any cluster — these are reported but not analysed further.
+
+**Phase 4 speed**: DeepSeek R1 (`deepseek-reasoner`) reasons about every cluster + the top 10 bridges + top 5 moats. Each call can take 20–90 seconds. Use `--deepseek-model deepseek-chat` for fast mode (no chain-of-thought, results in seconds).
 
 ### Markdown Report
-Check `findings/vectoreology_*.md` for:
-- Cluster analysis with visible reasoning chains
-- Bridge explanations (why domains connect)
-- Moat analysis (why domains are isolated)
-- Anomaly details with investigation prompts
 
-### Qdrant Storage
-Findings are stored in `vectoreology_findings` collection for:
-- Cross-referencing with KAE runs
-- Building meta-analysis over time
-- Query via Qdrant API or KAE Lens
+Open `findings/vectoreology_*.md` to see:
+- Each cluster: full R1 `**Thinking:**` block + `**Conclusion:**`
+- Top semantic bridges: why the domains connect
+- Knowledge moats: why the domains are isolated
+- Anomaly section: coherence failures, density outliers, source contradictions
 
-## Common Workflows
+---
 
-### Compare Collections
+## 6. Common Workflows
+
+### Fast pass (no reasoning)
 ```bash
-# Excavate multiple collections
-./vectoreologist --collection kae_chunks --output ./kae_findings
-./vectoreologist --collection marks_gpt_history --output ./gpt_findings
-
-# Compare topology
-diff kae_findings/vectoreology_*.md gpt_findings/vectoreology_*.md
+./vectoreologist --collection kae_chunks --deepseek-model deepseek-chat
 ```
 
-### Deep Dive on Specific Collection
+### Full R1 deep dive on a small collection
 ```bash
-# Use larger sample for comprehensive analysis
-./vectoreologist --collection kae_meta_graph --sample 96
+./vectoreologist --collection kae_meta_graph --sample 100
 ```
 
-### Validate KAE Concepts
+### Compare two collections
 ```bash
-# Run on same collection as a KAE run
-# Compare KAE concept nodes with Vectoreologist clusters
-# Look for:
-#   - KAE concepts that form tight clusters (validated)
-#   - Clusters with no corresponding KAE concept (missed by KAE)
-#   - KAE concepts spread across multiple clusters (over-generalized)
+./vectoreologist --collection kae_chunks --output ./findings/kae
+./vectoreologist --collection marks_gpt_history --output ./findings/gpt
+diff findings/kae/vectoreology_*.md findings/gpt/vectoreology_*.md
 ```
 
-## Troubleshooting
+---
+
+## 7. Troubleshooting
 
 ### "Failed to connect to Qdrant"
 ```bash
-# Check if Qdrant is running
 curl http://localhost:6333/collections
-
-# Restart if needed
 docker restart $(docker ps -q --filter ancestor=qdrant/qdrant)
 ```
 
 ### "No vectors returned"
 ```bash
-# Verify collection exists
+# Verify collection name and contents
 curl http://localhost:6333/collections
-
-# Check collection has vectors
 curl http://localhost:6333/collections/kae_chunks
 ```
 
-### "DeepSeek API error"
+### "No DeepSeek API key — skipping reasoning phase"
 ```bash
-# Verify API key is set
-echo $DEEPSEEK_API_KEY
+# Check .env is in the working directory
+cat .env | grep DEEPSEEK_API_KEY
 
-# Or check .env file
-cat .env | grep DEEPSEEK
+# Or pass it directly
+./vectoreologist --collection kae_chunks --deepseek-key sk-...
+```
+
+### "missing dependency: No module named 'umap'" 
+```bash
+pip install umap-learn hdbscan numpy
+```
+
+### Phase 4 hangs / times out
+Each R1 call has a 5-minute timeout. For large cluster counts use fast mode:
+```bash
+./vectoreologist --collection kae_chunks --deepseek-model deepseek-chat
 ```
 
 ### Build errors
 ```bash
-# Clean and rebuild
 make clean
 make deps
 make build
 ```
 
-## Next Steps
+---
 
-1. **Read DESIGN.md** for architecture details
-2. **Explore findings/** directory for reports
-3. **Query vectoreology_findings** collection via KAE Lens
-4. **Compare with KAE runs** to find convergence
-5. **Iterate on sampling strategies** for better coverage
+## 8. Next Steps
 
-## Advanced Usage
-
-### Custom sampling
-```go
-// Edit internal/excavator/sampler.go
-sampler := excavator.NewSampler(excavator.Stratified, time.Now().Unix())
-```
-
-### Adjust clustering parameters
-```go
-// Edit internal/topology/clusterer.go
-topo := topology.New()
-topo.neighbors = 20  // More neighbors = looser clusters
-topo.minDist = 0.05  // Lower = tighter UMAP projection
-```
-
-### Custom anomaly detection
-```go
-// Edit internal/anomaly/detector.go
-det := anomaly.New()
-det.coherenceThreshold = 0.4  // Lower = more anomalies flagged
-```
+1. Read `DESIGN.md` for architecture details
+2. Browse `findings/` for reports
+3. Query the `vectoreology_findings` Qdrant collection via KAE Lens
+4. Compare reports across collections to find convergence with KAE runs
+5. Tune `--sample` up for deeper coverage, down for faster iteration

@@ -3,6 +3,7 @@ package synthesis
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/meistro57/vectoreologist/internal/models"
 	qdrant "github.com/qdrant/go-client/qdrant"
+	"google.golang.org/grpc"
 )
 
 type Synthesizer struct {
@@ -18,9 +20,14 @@ type Synthesizer struct {
 	client     *qdrant.Client
 }
 
+const maxMsgSize = 256 * 1024 * 1024 // 256 MB
+
 func New(qdrantURL, outputPath string) *Synthesizer {
 	client, err := qdrant.NewClient(&qdrant.Config{
-		Host: qdrantURL,
+		Host: hostname(qdrantURL),
+		GrpcOptions: []grpc.DialOption{
+			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxMsgSize)),
+		},
 	})
 	if err != nil {
 		panic(fmt.Sprintf("Failed to connect to Qdrant: %v", err))
@@ -31,6 +38,14 @@ func New(qdrantURL, outputPath string) *Synthesizer {
 		outputPath: outputPath,
 		client:     client,
 	}
+}
+
+func hostname(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return rawURL
 }
 
 // GenerateReport creates a living markdown synthesis document

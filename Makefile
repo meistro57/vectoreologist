@@ -1,7 +1,10 @@
 .PHONY: build run clean test
 
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS := -ldflags "-X main.version=$(VERSION)"
+
 build:
-	go build -o vectoreologist ./cmd/vectoreologist
+	go build $(LDFLAGS) -o vectoreologist ./cmd/vectoreologist
 
 run:
 	go run ./cmd/vectoreologist

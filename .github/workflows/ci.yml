@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Build, Vet & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      # Python + ML deps are required by topology/clusterer_test.go.
+      # TestAnalyzeClusters_WithPython skips itself when the deps are absent,
+      # but installing them here gives us real UMAP+HDBSCAN coverage in CI.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python ML dependencies
+        run: pip install --quiet umap-learn hdbscan numpy
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        # -count=1 disables the test cache so each CI run is fresh.
+        # No QDRANT_URL or DEEPSEEK_API_KEY are set; tests that need them
+        # either mock the network (reasoner) or bypass the constructor
+        # (synthesis) or use t.Skip (topology python check).
+        run: go test -count=1 -timeout=10m ./...

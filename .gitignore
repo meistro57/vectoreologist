@@ -1,9 +1,12 @@
-# Binaries
-vectoreologist
-*.exe
+# Binaries (root-level only, so cmd/vectoreologist/ dir is not ignored)
+/vectoreologist
+/vectoreologist.exe
 *.dll
 *.so
 *.dylib
+
+# Windows/Linux cross-compiled binaries in dist/
+dist/
 
 # Test binaries
 *.test
@@ -32,7 +35,8 @@ Thumbs.db
 # Old Python artifacts (from initial exploration)
 venv/
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
 *.tsv
 *.json
 qdrant-edge-demo/

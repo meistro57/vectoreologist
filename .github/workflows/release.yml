@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for git describe
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+      - name: Build linux/amd64
+        run: |
+          GOOS=linux GOARCH=amd64 go build \
+            -ldflags "-X main.version=${{ env.VERSION }}" \
+            -o dist/vectoreologist-linux-amd64 \
+            ./cmd/vectoreologist
+
+      - name: Build linux/arm64
+        run: |
+          GOOS=linux GOARCH=arm64 go build \
+            -ldflags "-X main.version=${{ env.VERSION }}" \
+            -o dist/vectoreologist-linux-arm64 \
+            ./cmd/vectoreologist
+
+      - name: Build darwin/amd64
+        run: |
+          GOOS=darwin GOARCH=amd64 go build \
+            -ldflags "-X main.version=${{ env.VERSION }}" \
+            -o dist/vectoreologist-darwin-amd64 \
+            ./cmd/vectoreologist
+
+      - name: Build darwin/arm64
+        run: |
+          GOOS=darwin GOARCH=arm64 go build \
+            -ldflags "-X main.version=${{ env.VERSION }}" \
+            -o dist/vectoreologist-darwin-arm64 \
+            ./cmd/vectoreologist
+
+      - name: Build windows/amd64
+        run: |
+          GOOS=windows GOARCH=amd64 go build \
+            -ldflags "-X main.version=${{ env.VERSION }}" \
+            -o dist/vectoreologist-windows-amd64.exe \
+            ./cmd/vectoreologist
+
+      - name: Extract changelog entry
+        id: changelog
+        run: |
+          # Pull the section for this tag out of CHANGELOG.md
+          VERSION_NO_V="${{ env.VERSION }}"
+          VERSION_NO_V="${VERSION_NO_V#v}"
+          NOTES=$(awk "/^## \[${VERSION_NO_V}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES"     >> $GITHUB_OUTPUT
+          echo "EOF"         >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.changelog.outputs.notes }}
+          files: dist/*
