@@ -1,6 +1,13 @@
 # Vectoreologist
 
-Archaeological reasoning engine for vector space topology. Excavates vector embeddings from Qdrant, maps semantic structure with UMAP + HDBSCAN, and uses DeepSeek R1 to reason — with visible chain-of-thought — about what your vector space actually means.
+**vec·tor·e·ol·o·gist** | /ˌvɛk·tər·ɪˈɒl·ə·dʒɪst/ | *noun*
+> One who excavates meaning from the geometry of thought.
+
+---
+
+Your vector database isn't just storage — it's a **fossilized map of how your AI thinks**. Vectoreologist is the tool that reads it.
+
+It digs into your Qdrant collections, maps the hidden topology of your embeddings with UMAP + HDBSCAN, and unleashes DeepSeek R1 to reason — out loud, chain-of-thought and all — about what every cluster, bridge, and knowledge gap actually *means*. No black boxes. No vibes. Just visible reasoning about the structure of your semantic universe.
 
 [![CI](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml/badge.svg)](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml)
 
@@ -11,10 +18,10 @@ Archaeological reasoning engine for vector space topology. Excavates vector embe
 Vectoreologist applies knowledge archaeology to **vector embeddings themselves**, not the source text. It:
 
 1. **Excavates** vectors + metadata from any Qdrant collection
-2. **Maps topology** with real UMAP dimensionality reduction + HDBSCAN clustering
-3. **Detects anomalies** — incoherent clusters, orphaned concepts, density outliers, source contradictions
-4. **Reasons visibly** via DeepSeek R1: every cluster, top bridges, and moats get a full chain-of-thought + conclusion
-5. **Synthesizes** findings into timestamped markdown reports and stores them back to Qdrant
+2. **Maps topology** with real UMAP dimensionality reduction + HDBSCAN clustering — finds the clusters your data actually forms, not the ones you assumed
+3. **Detects anomalies** — incoherent clusters, orphaned concepts, density outliers, source contradictions — the weird stuff worth investigating
+4. **Reasons visibly** via DeepSeek R1: every cluster, every top bridge, every moat gets a full chain-of-thought + conclusion printed live to your terminal
+5. **Synthesizes** everything into timestamped markdown reports and stores findings back to Qdrant for cross-run analysis
 
 ---
 
