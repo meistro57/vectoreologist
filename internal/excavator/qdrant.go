@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 
 	"github.com/meistro57/vectoreologist/internal/models"
 	qdrant "github.com/qdrant/go-client/qdrant"
@@ -26,68 +27,114 @@ func New(rawURL string) *Excavator {
 	if err != nil {
 		panic(fmt.Sprintf("Failed to connect to Qdrant: %v", err))
 	}
-	
+
 	return &Excavator{client: client}
 }
 
-// Extract pulls vectors and metadata from a Qdrant collection
-func (e *Excavator) Extract(collectionName string, limit int) ([][]float32, []models.VectorMetadata, error) {
-	ctx := context.Background()
-	
-	// Scroll through collection to get points
-	lim := uint32(limit)
-	points, err := e.client.Scroll(ctx, &qdrant.ScrollPoints{
-		CollectionName: collectionName,
-		Limit:          &lim,
-		WithVectors:    qdrant.NewWithVectors(true),
-		WithPayload:    qdrant.NewWithPayload(true),
-	})
-	
+// CollectionSize returns the number of points in the named collection.
+func (e *Excavator) CollectionSize(name string) (uint64, error) {
+	info, err := e.client.GetCollectionInfo(context.Background(), name)
 	if err != nil {
-		return nil, nil, fmt.Errorf("scroll failed: %w", err)
+		return 0, fmt.Errorf("get collection info: %w", err)
+	}
+	return info.GetPointsCount(), nil
+}
+
+// Extract pulls up to limit vectors from a Qdrant collection using batched scrolling.
+// batchSize controls how many points are requested per scroll call.
+// When strict is true, any batch error aborts and returns an error; otherwise the
+// error is logged and extraction stops early with whatever was collected.
+// onBatch is called after each successful batch with (batchNum, fetched, target).
+// Pass nil to suppress progress callbacks.
+func (e *Excavator) Extract(collectionName string, limit, batchSize int, strict bool, onBatch func(batchNum, fetched, target int)) ([][]float32, []models.VectorMetadata, error) {
+	ctx := context.Background()
+
+	allVectors := make([][]float32, 0, limit)
+	allMetadata := make([]models.VectorMetadata, 0, limit)
+
+	var nextOffset *qdrant.PointId
+	batchNum := 0
+
+	for len(allVectors) < limit {
+		remaining := limit - len(allVectors)
+		currentBatch := batchSize
+		if currentBatch > remaining {
+			currentBatch = remaining
+		}
+
+		lim := uint32(currentBatch)
+		req := &qdrant.ScrollPoints{
+			CollectionName: collectionName,
+			Limit:          &lim,
+			WithVectors:    qdrant.NewWithVectors(true),
+			WithPayload:    qdrant.NewWithPayload(true),
+			Offset:         nextOffset,
+		}
+
+		points, offset, err := e.client.ScrollAndOffset(ctx, req)
+		if err != nil {
+			if strict {
+				return nil, nil, fmt.Errorf("batch %d scroll failed: %w", batchNum+1, err)
+			}
+			fmt.Fprintf(os.Stderr, "   ⚠ Batch %d failed: %v — stopping early\n", batchNum+1, err)
+			break
+		}
+
+		for _, point := range points {
+			vec, meta, ok := extractPoint(point)
+			if !ok {
+				continue
+			}
+			allVectors = append(allVectors, vec)
+			allMetadata = append(allMetadata, meta)
+		}
+
+		batchNum++
+		if onBatch != nil {
+			onBatch(batchNum, len(allVectors), limit)
+		}
+
+		if len(points) == 0 || offset == nil {
+			break // collection exhausted
+		}
+		nextOffset = offset
 	}
 
-	vectors := make([][]float32, 0, len(points))
-	metadata := make([]models.VectorMetadata, 0, len(points))
+	return allVectors, allMetadata, nil
+}
 
-	for _, point := range points {
-		// Extract vector — handle both unnamed and named vector collections.
-		// In Qdrant ≥1.12 the dense vector lives in VectorOutput.GetDense().Data;
-		// the top-level .Data field is deprecated and will be empty on newer servers.
-		var vec []float32
-		if v := point.Vectors.GetVector(); v != nil {
-			if dense := v.GetDense(); dense != nil {
+// extractPoint converts a RetrievedPoint into a vector and metadata.
+// Returns (vec, meta, true) on success; (nil, zero, false) if the point has no vector.
+func extractPoint(point *qdrant.RetrievedPoint) ([]float32, models.VectorMetadata, bool) {
+	var vec []float32
+	if v := point.Vectors.GetVector(); v != nil {
+		if dense := v.GetDense(); dense != nil {
+			vec = dense.Data
+		} else {
+			vec = v.Data // fallback for pre-1.12 servers
+		}
+	} else if named := point.Vectors.GetVectors(); named != nil {
+		for _, nv := range named.GetVectors() {
+			if dense := nv.GetDense(); dense != nil {
 				vec = dense.Data
 			} else {
-				vec = v.Data // fallback for pre-1.12 servers
+				vec = nv.Data
 			}
-		} else if named := point.Vectors.GetVectors(); named != nil {
-			for _, nv := range named.GetVectors() {
-				if dense := nv.GetDense(); dense != nil {
-					vec = dense.Data
-				} else {
-					vec = nv.Data
-				}
-				break
-			}
+			break
 		}
-		if len(vec) == 0 {
-			continue
-		}
-		vectors = append(vectors, vec)
-		
-		// Extract metadata
-		meta := models.VectorMetadata{
-			ID:        point.Id.GetNum(),
-			Fragment:  getPayloadString(point.Payload, "text", "N/A"),
-			Source:    getPayloadString(point.Payload, "source", "unknown"),
-			Layer:     getPayloadString(point.Payload, "layer", "surface"),
-			RunID:     getPayloadString(point.Payload, "run_id", ""),
-		}
-		metadata = append(metadata, meta)
+	}
+	if len(vec) == 0 {
+		return nil, models.VectorMetadata{}, false
 	}
 
-	return vectors, metadata, nil
+	meta := models.VectorMetadata{
+		ID:       point.Id.GetNum(),
+		Fragment: getPayloadString(point.Payload, "text", "N/A"),
+		Source:   getPayloadString(point.Payload, "source", "unknown"),
+		Layer:    getPayloadString(point.Payload, "layer", "surface"),
+		RunID:    getPayloadString(point.Payload, "run_id", ""),
+	}
+	return vec, meta, true
 }
 
 // hostname strips the scheme and port from a URL, returning just the host.

@@ -49,11 +49,13 @@ func loadDotEnv(path string) {
 
 func main() {
 	loadDotEnv(".env")
-	showVersion := flag.Bool("version", false, "Print version and exit")
-	collection  := flag.String("collection",   "",                          "Qdrant collection name (required)")
-	sampleSize  := flag.Int("sample",          5000,                        "Number of vectors to sample")
-	outputPath  := flag.String("output",       "./findings",                "Output directory for reports")
-	qdrantURL   := flag.String("qdrant-url",   "",                          "Qdrant URL (default: QDRANT_URL env or http://localhost:6333)")
+	showVersion  := flag.Bool("version",       false,                         "Print version and exit")
+	collection   := flag.String("collection",  "",                            "Qdrant collection name (required)")
+	sampleSize   := flag.Int("sample",         5000,                          "Number of vectors to sample")
+	batchSize    := flag.Int("batch-size",     5000,                          "Vectors per batch during extraction")
+	strict       := flag.Bool("strict",        false,                         "Fail immediately if any batch errors (default: stop early and continue)")
+	outputPath   := flag.String("output",      "./findings",                  "Output directory for reports")
+	qdrantURL    := flag.String("qdrant-url",  "",                            "Qdrant URL (default: QDRANT_URL env or http://localhost:6333)")
 	deepseekKey   := flag.String("deepseek-key",   "",                             "DeepSeek API key (default: DEEPSEEK_API_KEY env)")
 	deepseekURL   := flag.String("deepseek-url",   "https://api.deepseek.com/v1",  "DeepSeek API base URL")
 	deepseekModel := flag.String("deepseek-model", "deepseek-reasoner",            "Model: deepseek-reasoner (full R1 thinking) or deepseek-chat (fast)")
@@ -68,6 +70,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Error: --collection is required")
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	if *batchSize > *sampleSize {
+		*batchSize = *sampleSize
 	}
 
 	// Resolve Qdrant URL
@@ -90,14 +96,40 @@ func main() {
 	// Phase 1: Vector Excavation
 	fmt.Println("📡 Phase 1: Vector Excavation")
 	exc := excavator.New(qdrant)
-	vectors, metadata, err := exc.Extract(*collection, *sampleSize)
+
+	// Report collection size and adjust target if needed.
+	target := *sampleSize
+	collSize, err := exc.CollectionSize(*collection)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "   ⚠ Could not determine collection size: %v\n", err)
+	} else {
+		fmt.Printf("   ✓ Collection size: %d vectors\n", collSize)
+		if uint64(*sampleSize) >= collSize {
+			fmt.Printf("   ✓ Target sample: %d vectors (will extract all available)\n", *sampleSize)
+			target = int(collSize)
+		} else {
+			fmt.Printf("   ✓ Target sample: %d vectors\n", *sampleSize)
+		}
+	}
+	fmt.Printf("   ✓ Batch size: %d vectors\n", *batchSize)
+
+	totalBatches := (target + *batchSize - 1) / *batchSize
+	onBatch := func(batchNum, fetched, tgt int) {
+		pct := 0.0
+		if tgt > 0 {
+			pct = 100.0 * float64(fetched) / float64(tgt)
+		}
+		fmt.Printf("   → Batch %d/%d: Extracted %d vectors (%.1f%%)\n", batchNum, totalBatches, fetched, pct)
+	}
+
+	vectors, metadata, err := exc.Extract(*collection, *sampleSize, *batchSize, *strict, onBatch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Fatal: extraction failed: %v\n", err)
 		os.Exit(1)
 	}
 	sampler := excavator.NewSampler(excavator.Random, time.Now().Unix())
 	vectors, metadata = sampler.Sample(vectors, metadata, *sampleSize)
-	fmt.Printf("   ✓ Extracted %d vectors with metadata\n\n", len(vectors))
+	fmt.Printf("   ✓ Total extracted: %d vectors with metadata\n\n", len(vectors))
 
 	// Phase 2: Topology Analysis
 	fmt.Println("🗺️  Phase 2: Topology Analysis")

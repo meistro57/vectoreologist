@@ -45,10 +45,27 @@ def main():
     vectors  = np.array(data["vectors"], dtype=np.float32)
     metadata = data["metadata"]
     params   = data.get("params", {})
+    n_samples = len(vectors)
 
-    n_neighbors       = int(params.get("n_neighbors", 15))
-    min_dist          = float(params.get("min_dist", 0.1))
-    min_cluster_size  = max(5, len(vectors) // 100)
+    # Too few points to cluster — return everything as noise.
+    if n_samples < 4:
+        print(json.dumps({
+            "clusters":      [],
+            "noise_count":   n_samples,
+            "total_vectors": n_samples,
+        }))
+        return
+
+    n_neighbors      = int(params.get("n_neighbors", 15))
+    min_dist         = float(params.get("min_dist", 0.1))
+    min_cluster_size = max(2, len(vectors) // 100)
+
+    # Clamp UMAP n_neighbors: must be < n_samples.
+    n_neighbors = min(n_neighbors, n_samples - 1)
+
+    # Clamp HDBSCAN min_cluster_size: min_samples (defaults to min_cluster_size)
+    # must be <= n_samples, otherwise the internal KD-tree query fails.
+    min_cluster_size = min(min_cluster_size, n_samples)
 
     # UMAP: reduce to 2D for clustering
     reducer   = umap.UMAP(

@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-
+vectoreologist-lens
 # Windows/Linux cross-compiled binaries in dist/
 dist/
 
