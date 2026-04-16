@@ -1,10 +1,21 @@
-.PHONY: build run clean test
+.PHONY: build lens all run clean test
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
+all: build lens
+
 build:
 	go build $(LDFLAGS) -o vectoreologist ./cmd/vectoreologist
+
+lens:
+	go build $(LDFLAGS) -o vectoreologist-lens ./cmd/vectoreologist-lens
+
+install-lens: lens
+	cp vectoreologist-lens /usr/local/bin/
+
+run-lens:
+	./vectoreologist-lens findings/vectoreology_*.json
 
 run:
 	go run ./cmd/vectoreologist
@@ -32,7 +43,7 @@ deps:
 
 # Clean build artifacts
 clean:
-	rm -f vectoreologist
+	rm -f vectoreologist vectoreologist-lens
 	rm -rf findings/
 
 # Run tests

@@ -51,8 +51,29 @@ func (e *Excavator) Extract(collectionName string, limit int) ([][]float32, []mo
 	metadata := make([]models.VectorMetadata, 0, len(points))
 
 	for _, point := range points {
-		// Extract vector
-		vec := point.Vectors.GetVector().Data
+		// Extract vector — handle both unnamed and named vector collections.
+		// In Qdrant ≥1.12 the dense vector lives in VectorOutput.GetDense().Data;
+		// the top-level .Data field is deprecated and will be empty on newer servers.
+		var vec []float32
+		if v := point.Vectors.GetVector(); v != nil {
+			if dense := v.GetDense(); dense != nil {
+				vec = dense.Data
+			} else {
+				vec = v.Data // fallback for pre-1.12 servers
+			}
+		} else if named := point.Vectors.GetVectors(); named != nil {
+			for _, nv := range named.GetVectors() {
+				if dense := nv.GetDense(); dense != nil {
+					vec = dense.Data
+				} else {
+					vec = nv.Data
+				}
+				break
+			}
+		}
+		if len(vec) == 0 {
+			continue
+		}
 		vectors = append(vectors, vec)
 		
 		// Extract metadata

@@ -136,7 +136,7 @@ func main() {
 	// Phase 5: Synthesis & Storage
 	fmt.Println("📝 Phase 5: Synthesis & Storage")
 	synth      := synthesis.New(qdrant, *outputPath)
-	reportPath := synth.GenerateReport(allFindings, clusters, bridges, moats)
+	reportPath := synth.GenerateReport(allFindings, clusters, bridges, moats, *collection)
 	fmt.Printf("   ✓ Report written to %s\n", reportPath)
 	if err := synth.StoreFindings(allFindings); err != nil {
 		fmt.Fprintf(os.Stderr, "   ⚠ Failed to store findings: %v\n", err)

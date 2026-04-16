@@ -9,6 +9,8 @@ Your vector database isn't just storage — it's a **fossilized map of how your 
 
 It digs into your Qdrant collections, maps the hidden topology of your embeddings with UMAP + HDBSCAN, and unleashes DeepSeek R1 to reason — out loud, chain-of-thought and all — about what every cluster, bridge, and knowledge gap actually *means*. No black boxes. No vibes. Just visible reasoning about the structure of your semantic universe.
 
+Then **Vectoreologist Lens** lets you navigate those findings interactively — scroll through clusters, jump between semantic bridges, inspect anomalies, and fuzzy-search your entire knowledge topology from a slick terminal UI.
+
 [![CI](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml/badge.svg)](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml)
 
 ---
@@ -21,22 +23,31 @@ Vectoreologist applies knowledge archaeology to **vector embeddings themselves**
 2. **Maps topology** with real UMAP dimensionality reduction + HDBSCAN clustering — finds the clusters your data actually forms, not the ones you assumed
 3. **Detects anomalies** — incoherent clusters, orphaned concepts, density outliers, source contradictions — the weird stuff worth investigating
 4. **Reasons visibly** via DeepSeek R1: every cluster, every top bridge, every moat gets a full chain-of-thought + conclusion printed live to your terminal
-5. **Synthesizes** everything into timestamped markdown reports and stores findings back to Qdrant for cross-run analysis
+5. **Synthesizes** everything into timestamped markdown **and JSON** reports, then stores findings back to Qdrant
+6. **Explores interactively** with Vectoreologist Lens — a terminal UI for navigating clusters, bridges, anomalies, and reasoning chains
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Vectoreologist (Go CLI)                            │
-├─────────────────────────────────────────────────────┤
-│  1. Excavation      Qdrant gRPC → vectors+metadata  │
-│  2. Topology        UMAP + HDBSCAN (Python sidecar) │
-│  3. Anomaly         Go — coherence / density / moat │
-│  4. Reasoning       DeepSeek R1 — visible chains    │
-│  5. Synthesis       Markdown report + Qdrant store  │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  vectoreologist  (Go CLI)                                │
+├──────────────────────────────────────────────────────────┤
+│  1. Excavation      Qdrant gRPC → vectors + metadata     │
+│  2. Topology        UMAP + HDBSCAN (embedded Python)     │
+│  3. Anomaly         coherence / density / orphan / moat  │
+│  4. Reasoning       DeepSeek R1 — visible chains         │
+│  5. Synthesis       findings/TIMESTAMP.{md,json}         │
+└──────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────┐
+│  vectoreologist-lens  (Bubbletea TUI)                    │
+├──────────────────────────────────────────────────────────┤
+│  Clusters  │  Bridges  │  Anomalies  │  Search           │
+│  ↑↓ navigate · b/a/c switch views · / search · q quit   │
+└──────────────────────────────────────────────────────────┘
 ```
 
 The Python clustering script is **embedded in the Go binary** — no separate installation step needed beyond the pip packages.
@@ -67,7 +78,7 @@ pip install umap-learn hdbscan numpy
 git clone https://github.com/meistro57/vectoreologist.git
 cd vectoreologist
 make deps
-make build
+make all        # builds both vectoreologist and vectoreologist-lens
 ```
 
 ---
@@ -153,26 +164,56 @@ Or pass everything as flags.
 
 📝 Phase 5: Synthesis & Storage
    ✓ Report written to findings/vectoreology_2026-04-14_21-27-41.md
+   ✓ JSON written to findings/vectoreology_2026-04-14_21-27-41.json
    ✓ Findings stored in vectoreology_findings collection
 ```
 
-**Markdown report** at `findings/vectoreology_TIMESTAMP.md`:
-- Cluster analysis with full R1 `**Thinking:**` / `**Conclusion:**` blocks
-- Top 10 semantic bridges explained
-- Knowledge moats with isolation reasoning
-- All anomalies with detection rationale
+**Files written** to `findings/vectoreology_TIMESTAMP.{md,json}`:
+- Markdown: cluster analysis with full R1 `**Thinking:**` / `**Conclusion:**` blocks, top bridges, moats, anomalies
+- JSON: structured findings with reasoning attached to each cluster/bridge/moat — consumed by Vectoreologist Lens
+
+---
+
+## Vectoreologist Lens
+
+Interactive TUI for exploring findings without leaving your terminal.
+
+```bash
+# Generate a report first
+./vectoreologist --collection kae_chunks --sample 5000
+
+# Then explore it
+./vectoreologist-lens findings/vectoreology_*.json
+```
+
+**Keybindings:**
+
+| Key | Action |
+|---|---|
+| `↑↓` / `jk` | Navigate list |
+| `JK` | Scroll detail panel |
+| `c` | Cluster view |
+| `b` | Bridge view |
+| `a` | Anomaly view |
+| `/` | Fuzzy search |
+| `f` | Toggle anomalies-only filter |
+| `s` | Cycle sort (coherence / density / size / id) |
+| `r` | Reload report from disk |
+| `q` | Quit |
 
 ---
 
 ## Make shortcuts
 
 ```bash
-make excavate   # kae_chunks, sample 5000
-make meta       # kae_meta_graph, sample 100
-make history    # marks_gpt_history, sample 2000
-make forum      # qmu_forum, sample 300
-make test       # go test ./...
-make fmt        # go fmt ./...
+make all            # build vectoreologist + vectoreologist-lens
+make build          # CLI only
+make lens           # TUI only
+make install-lens   # copy vectoreologist-lens to /usr/local/bin
+make excavate       # kae_chunks, sample 5000
+make run-lens       # open latest findings with the lens
+make test           # go test ./...
+make fmt            # go fmt ./...
 ```
 
 ---

@@ -48,12 +48,13 @@ func hostname(rawURL string) string {
 	return rawURL
 }
 
-// GenerateReport creates a living markdown synthesis document
+// GenerateReport creates a living markdown synthesis document and a matching JSON file.
 func (s *Synthesizer) GenerateReport(
 	findings []models.Finding,
 	clusters []models.Cluster,
 	bridges []models.Bridge,
 	moats []models.Moat,
+	collection string,
 ) string {
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
 	reportPath := filepath.Join(s.outputPath, fmt.Sprintf("vectoreology_%s.md", timestamp))
@@ -94,6 +95,12 @@ func (s *Synthesizer) GenerateReport(
 	}
 
 	os.WriteFile(reportPath, []byte(sb.String()), 0644)
+
+	// Also generate JSON for the TUI lens.
+	if jsonPath := s.GenerateJSON(findings, clusters, bridges, moats, collection, timestamp); jsonPath != "" {
+		fmt.Printf("   ✓ JSON written to %s\n", jsonPath)
+	}
+
 	return reportPath
 }
 

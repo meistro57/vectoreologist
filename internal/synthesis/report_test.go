@@ -26,7 +26,7 @@ func TestGenerateReport_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
 	s := newTestSynthesizer(dir)
 
-	path := s.GenerateReport(nil, nil, nil, nil)
+	path := s.GenerateReport(nil, nil, nil, nil, "test")
 	if path == "" {
 		t.Fatal("GenerateReport returned empty path")
 	}
@@ -39,7 +39,7 @@ func TestGenerateReport_FilePathIsInsideOutputDir(t *testing.T) {
 	dir := t.TempDir()
 	s := newTestSynthesizer(dir)
 
-	path := s.GenerateReport(nil, nil, nil, nil)
+	path := s.GenerateReport(nil, nil, nil, nil, "test")
 	// Ensure path is under our output directory.
 	rel, err := filepath.Rel(dir, path)
 	if err != nil || strings.HasPrefix(rel, "..") {
@@ -51,7 +51,7 @@ func TestGenerateReport_ContainsTitleAndTimestamp(t *testing.T) {
 	dir := t.TempDir()
 	s := newTestSynthesizer(dir)
 
-	path := s.GenerateReport(nil, nil, nil, nil)
+	path := s.GenerateReport(nil, nil, nil, nil, "test")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("could not read report: %v", err)
@@ -81,7 +81,7 @@ func TestGenerateReport_TopologySummaryCounts(t *testing.T) {
 		{ClusterA: 2, ClusterB: 3},
 	}
 
-	path := s.GenerateReport(nil, clusters, bridges, moats)
+	path := s.GenerateReport(nil, clusters, bridges, moats, "test")
 	content, _ := os.ReadFile(path)
 	body := string(content)
 
@@ -108,7 +108,7 @@ func TestGenerateReport_ClusterAnalysisSection(t *testing.T) {
 		},
 	}
 
-	path := s.GenerateReport(findings, nil, nil, nil)
+	path := s.GenerateReport(findings, nil, nil, nil, "test")
 	content, _ := os.ReadFile(path)
 	body := string(content)
 
@@ -135,7 +135,7 @@ func TestGenerateReport_BridgeAnalysisSection(t *testing.T) {
 		},
 	}
 
-	path := s.GenerateReport(findings, nil, nil, nil)
+	path := s.GenerateReport(findings, nil, nil, nil, "test")
 	content, _ := os.ReadFile(path)
 	body := string(content)
 
@@ -162,7 +162,7 @@ func TestGenerateReport_MoatAnalysisSection(t *testing.T) {
 		},
 	}
 
-	path := s.GenerateReport(findings, nil, nil, nil)
+	path := s.GenerateReport(findings, nil, nil, nil, "test")
 	content, _ := os.ReadFile(path)
 	body := string(content)
 
@@ -187,7 +187,7 @@ func TestGenerateReport_FiltersFindingsByType(t *testing.T) {
 		{Type: "coherence_anomaly", Subject: "Anomaly X", ReasoningChain: "anomaly text"},
 	}
 
-	path := s.GenerateReport(findings, nil, nil, nil)
+	path := s.GenerateReport(findings, nil, nil, nil, "test")
 	content, _ := os.ReadFile(path)
 	body := string(content)
 
@@ -203,7 +203,7 @@ func TestGenerateReport_EmptyFindingsStillProducesStructure(t *testing.T) {
 	dir := t.TempDir()
 	s := newTestSynthesizer(dir)
 
-	path := s.GenerateReport(nil, nil, nil, nil)
+	path := s.GenerateReport(nil, nil, nil, nil, "test")
 	content, _ := os.ReadFile(path)
 	body := string(content)
 
@@ -225,7 +225,7 @@ func TestGenerateReport_OutputDirCreatedIfAbsent(t *testing.T) {
 	// The nested directory does not exist yet.
 	s := newTestSynthesizer(nested)
 
-	path := s.GenerateReport(nil, nil, nil, nil)
+	path := s.GenerateReport(nil, nil, nil, nil, "test")
 	if path == "" {
 		t.Fatal("GenerateReport returned empty path")
 	}
