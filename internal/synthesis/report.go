@@ -14,6 +14,8 @@ import (
 	"google.golang.org/grpc"
 )
 
+const findingsCollection = "vectoreology_findings"
+
 type Synthesizer struct {
 	qdrantURL  string
 	outputPath string
@@ -104,17 +106,59 @@ func (s *Synthesizer) GenerateReport(
 	return reportPath
 }
 
-// StoreFindings writes findings back to Qdrant
+// StoreFindings writes findings back to Qdrant.
+// Uses a 1-dimensional confidence vector; payload holds all finding fields.
 func (s *Synthesizer) StoreFindings(findings []models.Finding) error {
+	if len(findings) == 0 {
+		return nil
+	}
+
 	ctx := context.Background()
-	collectionName := "vectoreology_findings"
 
-	// TODO: Create collection if it doesn't exist
-	// TODO: Generate embeddings from reasoning chains
-	// TODO: Store points with metadata
+	exists, err := s.client.CollectionExists(ctx, findingsCollection)
+	if err != nil {
+		return fmt.Errorf("checking collection: %w", err)
+	}
+	if !exists {
+		if err := s.client.CreateCollection(ctx, &qdrant.CreateCollection{
+			CollectionName: findingsCollection,
+			VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
+				Size:     1,
+				Distance: qdrant.Distance_Cosine,
+			}),
+		}); err != nil {
+			return fmt.Errorf("creating collection: %w", err)
+		}
+	}
 
-	_ = ctx
-	_ = collectionName
+	base := uint64(time.Now().UnixMilli())
+	points := make([]*qdrant.PointStruct, 0, len(findings))
+	for i, f := range findings {
+		clusterStrs := make([]string, len(f.Clusters))
+		for j, c := range f.Clusters {
+			clusterStrs[j] = fmt.Sprintf("%d", c)
+		}
+		points = append(points, &qdrant.PointStruct{
+			Id:      qdrant.NewIDNum(base + uint64(i)),
+			Vectors: qdrant.NewVectors(float32(f.Confidence)),
+			Payload: map[string]*qdrant.Value{
+				"type":            qdrant.NewValueString(f.Type),
+				"subject":         qdrant.NewValueString(f.Subject),
+				"reasoning_chain": qdrant.NewValueString(f.ReasoningChain),
+				"confidence":      qdrant.NewValueDouble(f.Confidence),
+				"is_anomaly":      qdrant.NewValueBool(f.IsAnomaly),
+				"clusters":        qdrant.NewValueString(strings.Join(clusterStrs, ",")),
+				"stored_at":       qdrant.NewValueString(time.Now().Format(time.RFC3339)),
+			},
+		})
+	}
+
+	if _, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
+		CollectionName: findingsCollection,
+		Points:         points,
+	}); err != nil {
+		return fmt.Errorf("upserting findings: %w", err)
+	}
 
 	return nil
 }

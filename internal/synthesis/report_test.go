@@ -256,15 +256,9 @@ func TestHostname_StripScheme(t *testing.T) {
 
 // ---- StoreFindings ----------------------------------------------------------
 
-func TestStoreFindings_NoopReturnsNil(t *testing.T) {
-	// StoreFindings is a stub; it must not panic and must return nil.
-	s := newTestSynthesizer(t.TempDir())
-	findings := []models.Finding{
-		{Type: "cluster_analysis", Subject: "x"},
-	}
-	if err := s.StoreFindings(findings); err != nil {
-		t.Errorf("StoreFindings should return nil (stub), got: %v", err)
-	}
+func TestStoreFindings_RequiresQdrant(t *testing.T) {
+	// StoreFindings now makes real Qdrant calls; skip if no live server.
+	t.Skip("requires a live Qdrant instance — run manually with QDRANT_URL set")
 }
 
 func TestStoreFindings_EmptySlice(t *testing.T) {

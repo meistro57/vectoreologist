@@ -11,6 +11,16 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [0.3.0] - 2026-04-15
+
+### Fixed
+- **`StoreFindings` implemented** — the `vectoreology_findings` Qdrant collection is now actually created and populated on every run; previously the function was a no-op stub that printed a false success message
+  - Creates the collection on first run (1-dimensional cosine vector; full embeddings deferred until an embedding API is wired in)
+  - Stores each finding with payload fields: `type`, `subject`, `reasoning_chain`, `confidence`, `is_anomaly`, `clusters`, `stored_at`
+  - Uses millisecond-timestamp-based IDs so successive runs append rather than overwrite
+
+---
+
 ## [0.2.0] - 2026-04-15
 
 ### Added
@@ -56,6 +66,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `excavator.ScrollPoints.Limit` type corrected to `*uint32`
 - DeepSeek response parsing no longer panics on empty or malformed API responses
 
-[Unreleased]: https://github.com/meistro57/vectoreologist/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/meistro57/vectoreologist/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/meistro57/vectoreologist/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/meistro57/vectoreologist/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/meistro57/vectoreologist/releases/tag/v0.1.0
