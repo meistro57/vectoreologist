@@ -53,9 +53,13 @@ type Model struct {
 	searchActive  bool
 	searchResults []searchResult
 
-	width  int
-	height int
-	err    error
+	// export
+	showExportMenu bool
+	exportStatus   string
+
+	width   int
+	height  int
+	err     error
 	loading bool
 }
 
@@ -108,6 +112,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	if m.searchActive {
 		return m.handleSearchKey(msg)
+	}
+	if m.showExportMenu {
+		return m.handleExportKey(msg)
 	}
 
 	switch msg.String() {
@@ -175,6 +182,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.cycleSortField()
 		m.applyFilters()
 
+	case "e":
+		m.showExportMenu = true
+		m.exportStatus = ""
+
 	case "r":
 		m.loading = true
 		return *m, loadReportCmd(m.reportPath)
@@ -196,6 +207,19 @@ func (m *Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.searchActive = false
 			m.detailScroll = 0
 		}
+	}
+	return *m, nil
+}
+
+func (m *Model) handleExportKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.showExportMenu = false
+		m.exportStatus = ""
+	case "j":
+		m.exportStatus = m.exportCurrentItem()
+	case "v":
+		m.exportStatus = m.exportVisibleList()
 	}
 	return *m, nil
 }

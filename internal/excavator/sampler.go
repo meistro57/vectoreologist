@@ -1,10 +1,15 @@
 package excavator
 
 import (
+	"math"
 	"math/rand"
 
 	"github.com/meistro57/vectoreologist/internal/models"
 )
+
+// diversePoolCap limits the candidate pool fed to MaxMin sampling.
+// MaxMin is O(pool × target × dims), so capping keeps it practical.
+const diversePoolCap = 3000
 
 // SamplingStrategy determines how vectors are selected from a collection
 type SamplingStrategy string
@@ -101,14 +106,92 @@ func (s *Sampler) stratifiedSample(
 	return sampledVecs, sampledMeta
 }
 
+// diverseSample implements greedy MaxMin (Farthest-First) sampling.
+// It iteratively picks the point maximally distant from the current selection,
+// guaranteeing that the selected set spans the vector space.
 func (s *Sampler) diverseSample(
 	vectors [][]float32,
 	metadata []models.VectorMetadata,
 	targetSize int,
 ) ([][]float32, []models.VectorMetadata) {
-	// TODO: Implement MaxMin or FarthestFirst sampling for diversity
-	// For now, fallback to random
-	return s.randomSample(vectors, metadata, targetSize)
+	// Pre-filter to a manageable pool to bound O(pool × target × dims) cost.
+	poolVecs, poolMeta := vectors, metadata
+	if len(vectors) > diversePoolCap {
+		poolVecs, poolMeta = s.randomSample(vectors, metadata, diversePoolCap)
+	}
+	pool := len(poolVecs)
+	if pool <= targetSize {
+		return poolVecs, poolMeta
+	}
+
+	rng := rand.New(rand.NewSource(s.seed))
+
+	// minDist[i] = min squared-L2 distance from point i to any selected point.
+	// Zero means the point is already selected.
+	minDist := make([]float64, pool)
+	for i := range minDist {
+		minDist[i] = math.MaxFloat64
+	}
+
+	selected := make([]int, 0, targetSize)
+
+	// Seed with a random point.
+	first := rng.Intn(pool)
+	selected = append(selected, first)
+	minDist[first] = 0
+	updateMinDist(minDist, poolVecs, first)
+
+	for len(selected) < targetSize {
+		best, bestD := -1, -1.0
+		for i, d := range minDist {
+			if d > bestD {
+				bestD = d
+				best = i
+			}
+		}
+		if best < 0 {
+			break
+		}
+		selected = append(selected, best)
+		minDist[best] = 0
+		updateMinDist(minDist, poolVecs, best)
+	}
+
+	out := make([][]float32, len(selected))
+	outM := make([]models.VectorMetadata, len(selected))
+	for i, idx := range selected {
+		out[i] = poolVecs[idx]
+		outM[i] = poolMeta[idx]
+	}
+	return out, outM
+}
+
+// updateMinDist sets minDist[i] = min(minDist[i], squaredL2(vecs[pivot], vecs[i]))
+// for all unselected points (minDist[i] > 0).
+func updateMinDist(minDist []float64, vecs [][]float32, pivot int) {
+	pv := vecs[pivot]
+	for i, d := range minDist {
+		if d == 0 {
+			continue
+		}
+		if dist := squaredL2(pv, vecs[i]); dist < d {
+			minDist[i] = dist
+		}
+	}
+}
+
+// squaredL2 returns the squared Euclidean distance between two vectors.
+func squaredL2(a, b []float32) float64 {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	var sum float64
+	for i := 0; i < n; i++ {
+		d := float64(a[i] - b[i])
+		sum += d * d
+	}
+	return sum
 }
 
 func (s *Sampler) temporalSample(

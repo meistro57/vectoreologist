@@ -207,7 +207,7 @@ func TestStratifiedSample_RepresentsBothSources(t *testing.T) {
 }
 
 // ============================================================
-// Diverse strategy (currently falls back to random)
+// Diverse strategy — MaxMin (Farthest-First) sampling
 // ============================================================
 
 func TestDiverseSample_ReturnsSampledCount(t *testing.T) {
@@ -226,6 +226,91 @@ func TestDiverseSample_EmptyInput(t *testing.T) {
 	gv, gm := s.Sample(nil, nil, 5)
 	if len(gv) != 0 || len(gm) != 0 {
 		t.Errorf("expected empty, got %d/%d", len(gv), len(gm))
+	}
+}
+
+func TestDiverseSample_NoDuplicates(t *testing.T) {
+	vecs := makeVectors(50, 4)
+	meta := makeMetadata(50, 2)
+	s := NewSampler(Diverse, 7)
+
+	_, gm := s.Sample(vecs, meta, 20)
+
+	seen := make(map[uint64]bool)
+	for _, m := range gm {
+		if seen[m.ID] {
+			t.Errorf("duplicate ID %d in diverse sample", m.ID)
+		}
+		seen[m.ID] = true
+	}
+}
+
+func TestDiverseSample_SpreadsBothClusters(t *testing.T) {
+	// 20 vectors: first 10 near origin, last 10 far away.
+	// MaxMin should select from both groups.
+	n := 20
+	vecs := make([][]float32, n)
+	meta := makeMetadata(n, 2)
+	for i := range vecs {
+		v := make([]float32, 4)
+		if i < 10 {
+			v[0] = float32(i) * 0.001 // near (0,0,0,0)
+		} else {
+			v[0] = 100.0 + float32(i-10)*0.001 // far
+		}
+		vecs[i] = v
+	}
+
+	s := NewSampler(Diverse, 42)
+	gv, gm := s.Sample(vecs, meta, 4)
+
+	if len(gv) != 4 || len(gm) != 4 {
+		t.Fatalf("want 4 samples, got %d", len(gv))
+	}
+
+	var near, far int
+	for _, v := range gv {
+		if v[0] < 50 {
+			near++
+		} else {
+			far++
+		}
+	}
+	if near == 0 || far == 0 {
+		t.Errorf("diverse sample should span both clusters; near=%d far=%d", near, far)
+	}
+}
+
+func TestDiverseSample_TargetGreaterThanLen(t *testing.T) {
+	vecs := makeVectors(5, 4)
+	meta := makeMetadata(5, 1)
+	s := NewSampler(Diverse, 0)
+
+	gv, gm := s.Sample(vecs, meta, 100)
+	if len(gv) != 5 || len(gm) != 5 {
+		t.Errorf("want all 5, got %d/%d", len(gv), len(gm))
+	}
+}
+
+// ============================================================
+// squaredL2 helper (white-box)
+// ============================================================
+
+func TestSquaredL2_BasicCases(t *testing.T) {
+	cases := []struct {
+		a, b []float32
+		want float64
+	}{
+		{[]float32{0, 0, 0}, []float32{0, 0, 0}, 0},
+		{[]float32{1, 0, 0}, []float32{0, 0, 0}, 1},
+		{[]float32{3, 4}, []float32{0, 0}, 25}, // 3²+4²=25
+		{[]float32{1, 1}, []float32{1, 1}, 0},
+	}
+	for _, tc := range cases {
+		got := squaredL2(tc.a, tc.b)
+		if got != tc.want {
+			t.Errorf("squaredL2(%v, %v) = %v; want %v", tc.a, tc.b, got, tc.want)
+		}
 	}
 }
 

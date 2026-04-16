@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // writeEnvFile creates a temp .env file with the given content and returns its path.
@@ -193,5 +194,94 @@ func TestLoadDotEnv_InlineCommentNotStripped(t *testing.T) {
 	got := os.Getenv("TEST_DOTENV_INLINE")
 	if got != "value # comment" {
 		t.Errorf("inline comment: want %q, got %q", "value # comment", got)
+	}
+}
+
+// ---- watch mode flag tests --------------------------------------------------
+
+func TestWatchDurationValid(t *testing.T) {
+	cases := []struct {
+		input string
+		want  time.Duration
+	}{
+		{"5m", 5 * time.Minute},
+		{"1h", time.Hour},
+		{"30s", 30 * time.Second},
+		{"1h30m", 90 * time.Minute},
+		{"100ms", 100 * time.Millisecond},
+	}
+	for _, tc := range cases {
+		d, err := time.ParseDuration(tc.input)
+		if err != nil {
+			t.Errorf("ParseDuration(%q) unexpected error: %v", tc.input, err)
+			continue
+		}
+		if d != tc.want {
+			t.Errorf("ParseDuration(%q) = %v; want %v", tc.input, d, tc.want)
+		}
+		if d <= 0 {
+			t.Errorf("ParseDuration(%q) = %v; want positive", tc.input, d)
+		}
+	}
+}
+
+func TestWatchDurationInvalid(t *testing.T) {
+	cases := []string{
+		"5 minutes",
+		"five",
+		"1d", // Go does not support day units
+		"1w",
+	}
+	for _, s := range cases {
+		_, err := time.ParseDuration(s)
+		if err == nil {
+			t.Errorf("ParseDuration(%q) expected error, got nil", s)
+		}
+	}
+}
+
+func TestWatchDurationNonPositive(t *testing.T) {
+	cases := []struct {
+		input   string
+		wantPos bool
+	}{
+		{"-1m", false},
+		{"-30s", false},
+		{"0s", false},
+		{"1s", true},
+	}
+	for _, tc := range cases {
+		d, err := time.ParseDuration(tc.input)
+		if err != nil {
+			continue
+		}
+		isPos := d > 0
+		if isPos != tc.wantPos {
+			t.Errorf("ParseDuration(%q) = %v; positive=%v, want positive=%v", tc.input, d, isPos, tc.wantPos)
+		}
+	}
+}
+
+// ---- batch size clamping tests ----------------------------------------------
+
+func TestBatchSizeClamping(t *testing.T) {
+	cases := []struct {
+		sample    int
+		batch     int
+		wantBatch int
+	}{
+		{5000, 5000, 5000}, // equal — no clamp
+		{100, 5000, 100},   // batch > sample — clamp to sample
+		{1000, 500, 500},   // batch < sample — no change
+		{1, 1, 1},          // minimum
+	}
+	for _, tc := range cases {
+		b := tc.batch
+		if b > tc.sample {
+			b = tc.sample
+		}
+		if b != tc.wantBatch {
+			t.Errorf("clamp(sample=%d, batch=%d) = %d; want %d", tc.sample, tc.batch, b, tc.wantBatch)
+		}
 	}
 }

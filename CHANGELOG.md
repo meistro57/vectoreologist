@@ -9,6 +9,26 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+- **Watch mode** (`--watch <duration>`) — re-runs the full excavation pipeline on a configurable
+  interval (e.g. `--watch 5m`, `--watch 1h`), writing a new timestamped report each cycle and
+  printing a one-line elapsed-time summary per cycle to stdout. Stops cleanly on SIGINT/SIGTERM.
+  The timer restarts after each cycle completes, so overlapping runs are impossible even when a
+  DeepSeek R1 call exceeds the interval. Cycle errors are logged as warnings; the loop continues.
+- `make watch` and `make watch-meta` convenience targets
+- **Diverse sampling** (`--sample-strategy diverse`) — implements greedy MaxMin (Farthest-First)
+  selection that maximises the minimum pairwise distance across the chosen vectors. When selected,
+  extracts a 1.5× larger pool from Qdrant then downsamples to `--sample`, ensuring the topology
+  analysis sees the full spread of the vector space rather than a random slice.
+- **Semantic cluster labels** (`--semantic-labels`) — calls `deepseek-chat` once per cluster
+  after topology analysis to replace the raw `layer/source` label with a concise 3–6 word
+  semantic description derived from the cluster's text fragments. Labels feed into all subsequent
+  reasoning, reports, and the Lens TUI.
+- **Lens TUI export** (`e` key) — press `e` in any view to open the export menu; `j` exports
+  the currently selected item (cluster, bridge, or anomaly) to a JSON file; `v` exports the
+  entire visible list; `esc` closes the menu. Files are written to the same directory as the
+  loaded report.
+
 ---
 
 ## [0.3.0] - 2026-04-15

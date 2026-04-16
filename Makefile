@@ -36,6 +36,14 @@ history:
 forum:
 	./vectoreologist --collection qmu_forum --sample 300
 
+# Watch kae_chunks every 5 minutes
+watch:
+	./vectoreologist --collection kae_chunks --sample 5000 --watch 5m
+
+# Watch meta-graph every 10 minutes
+watch-meta:
+	./vectoreologist --collection kae_meta_graph --sample 100 --watch 10m
+
 # Install dependencies
 deps:
 	go mod tidy

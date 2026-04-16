@@ -47,6 +47,11 @@ var (
 	moatStyle = lipgloss.NewStyle().
 			Foreground(colorYellow)
 
+	exportMenuStyle = lipgloss.NewStyle().
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(colorYellow).
+				Padding(0, 1)
+
 	errorStyle = lipgloss.NewStyle().
 			Foreground(colorRed).
 			Bold(true)

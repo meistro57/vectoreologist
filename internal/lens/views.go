@@ -26,7 +26,11 @@ func (m Model) View() string {
 	// Available height for content area.
 	headerH := lipgloss.Height(header)
 	footerH := lipgloss.Height(footer)
-	contentH := m.height - headerH - footerH
+	exportH := 0
+	if m.showExportMenu {
+		exportH = 3
+	}
+	contentH := m.height - headerH - footerH - exportH
 	if contentH < 4 {
 		contentH = 4
 	}
@@ -43,6 +47,9 @@ func (m Model) View() string {
 		content = m.renderClusterView(contentH)
 	}
 
+	if m.showExportMenu {
+		return header + "\n" + content + "\n" + m.renderExportMenu() + "\n" + footer
+	}
 	return header + "\n" + content + "\n" + footer
 }
 
@@ -128,10 +135,25 @@ func (m Model) renderFooter() string {
 		"/ search",
 		"f filter",
 		"s sort",
+		"e export",
 		"r reload",
 		"q quit",
 	}
 	return footerStyle.Width(m.width).Render(strings.Join(hints, dimStyle.Render("  ·  ")))
+}
+
+// renderExportMenu renders the export overlay panel.
+func (m Model) renderExportMenu() string {
+	hints := dimStyle.Render("[j] current item  ·  [v] visible list  ·  [esc] close")
+	line := titleStyle.Render("Export") + "  " + hints
+	if m.exportStatus != "" {
+		line += "\n  " + m.exportStatus
+	}
+	width := m.width - 4
+	if width < 20 {
+		width = 20
+	}
+	return exportMenuStyle.Width(width).Render(line)
 }
 
 // ── Cluster View ──────────────────────────────────────────────────────────────
