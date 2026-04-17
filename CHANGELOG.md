@@ -10,7 +10,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased]
 
 ### Added
-- **Watch mode** (`--watch <duration>`) — re-runs the full excavation pipeline on a configurable
+- **Semantic cluster labels from R1 conclusions** — after DeepSeek R1 reasoning, the first
+  sentence of each cluster's `**Conclusion:**` is parsed, stripped of markdown, and promoted
+  into `cluster.Label` (capped at ~80 chars). The original `layer/source`-based label from
+  HDBSCAN is preserved in a new `cluster.Source` field and carried through to JSON reports.
+  Bridges receive the same treatment via a new `bridge.Label` field.
+- **Text snippets in cluster prompts** — for collections where source URLs are absent or
+  uninformative (e.g. `kae_lens_findings`), `ReasonAboutTopology` now fetches up to 5 text
+  payload fragments from each cluster's member vectors and includes them in the R1 prompt so
+  the model reasons about actual content rather than just topology metrics.
+
+### Watch mode (`--watch <duration>`) — re-runs the full excavation pipeline on a configurable
   interval (e.g. `--watch 5m`, `--watch 1h`), writing a new timestamped report each cycle and
   printing a one-line elapsed-time summary per cycle to stdout. Stops cleanly on SIGINT/SIGTERM.
   The timer restarts after each cycle completes, so overlapping runs are impossible even when a

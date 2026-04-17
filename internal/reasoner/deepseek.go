@@ -40,13 +40,23 @@ func New2(apiURL, apiKey, model string) *Reasoner {
 // ReasonAboutTopology uses DeepSeek to analyze vector topology.
 // It reasons about every cluster, the top 10 bridges by strength,
 // and the top 5 moats by distance.
+// metadata is used to pull text snippets into cluster prompts; pass nil to omit.
 func (r *Reasoner) ReasonAboutTopology(
 	clusters []models.Cluster,
 	bridges []models.Bridge,
 	moats []models.Moat,
+	metadata []models.VectorMetadata,
 ) []models.Finding {
 	findings := []models.Finding{}
 	total := len(clusters)
+
+	// Build a fast lookup from vector ID → text fragment.
+	byID := make(map[uint64]string, len(metadata))
+	for _, m := range metadata {
+		if m.Fragment != "" && m.Fragment != "N/A" {
+			byID[m.ID] = m.Fragment
+		}
+	}
 
 	sort.Slice(bridges, func(i, j int) bool { return bridges[i].Strength > bridges[j].Strength })
 	if len(bridges) > 10 {
@@ -72,7 +82,8 @@ func (r *Reasoner) ReasonAboutTopology(
 		done++
 		subject := fmt.Sprintf("Cluster %d: %s", cluster.ID, cluster.Label)
 		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
-		resp, err := r.callDeepSeek(buildClusterPrompt(cluster))
+		snippets := clusterSnippets(cluster, byID, 5)
+		resp, err := r.callDeepSeek(buildClusterPrompt(cluster, snippets))
 		if err != nil {
 			fmt.Printf("\n   Warning: cluster %d: %v\n", cluster.ID, err)
 			continue
@@ -184,8 +195,8 @@ func formatForReport(r *deepSeekResponse) string {
 	return r.conclusion
 }
 
-func buildClusterPrompt(cluster models.Cluster) string {
-	return fmt.Sprintf(`Analyze this vector embedding cluster from a knowledge archaeology system.
+func buildClusterPrompt(cluster models.Cluster, snippets []string) string {
+	base := fmt.Sprintf(`Analyze this vector embedding cluster from a knowledge archaeology system.
 
 Cluster Details:
 - ID: %d
@@ -193,9 +204,31 @@ Cluster Details:
 - Size: %d vectors
 - Density: %.2f
 - Coherence: %.2f
+`, cluster.ID, cluster.Label, cluster.Size, cluster.Density, cluster.Coherence)
 
-In 2-3 sentences: what semantic concept does this cluster represent?`,
-		cluster.ID, cluster.Label, cluster.Size, cluster.Density, cluster.Coherence)
+	if len(snippets) > 0 {
+		base += "\nSample content from member vectors:\n"
+		for _, s := range snippets {
+			base += fmt.Sprintf("• %s\n", s)
+		}
+	}
+
+	base += "\nIn 2-3 sentences: what semantic concept does this cluster represent? End your response with a **Conclusion:** paragraph naming the concept."
+	return base
+}
+
+// clusterSnippets returns up to n non-empty text fragments from cluster members.
+func clusterSnippets(cluster models.Cluster, byID map[uint64]string, n int) []string {
+	var out []string
+	for _, id := range cluster.VectorIDs {
+		if frag, ok := byID[id]; ok {
+			out = append(out, frag)
+			if len(out) >= n {
+				break
+			}
+		}
+	}
+	return out
 }
 
 func buildBridgePrompt(bridge models.Bridge) string {

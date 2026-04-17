@@ -149,7 +149,9 @@ func runOnce(cfg config) (string, error) {
 	var reasonedFindings []models.Finding
 	if cfg.deepseekKey != "" {
 		r := reasoner.New2(cfg.deepseekURL, cfg.deepseekKey, cfg.deepseekModel)
-		reasonedFindings = r.ReasonAboutTopology(clusters, bridges, moats)
+		reasonedFindings = r.ReasonAboutTopology(clusters, bridges, moats, metadata)
+		clusters = reasoner.PromoteClusterLabels(reasonedFindings, clusters)
+		bridges = reasoner.PromoteBridgeLabels(reasonedFindings, bridges)
 	} else {
 		fmt.Println("   ⚠ No DeepSeek API key — skipping reasoning phase")
 	}

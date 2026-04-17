@@ -219,12 +219,26 @@ func TestFormatForReport_WithoutThinking(t *testing.T) {
 
 func TestBuildClusterPrompt_ContainsFields(t *testing.T) {
 	c := models.Cluster{ID: 7, Label: "my label", Size: 42, Density: 0.65, Coherence: 0.88}
-	p := buildClusterPrompt(c)
+	p := buildClusterPrompt(c, nil)
 	checks := []string{"7", "my label", "42", "0.65", "0.88"}
 	for _, s := range checks {
 		if !strings.Contains(p, s) {
 			t.Errorf("cluster prompt missing %q\nfull prompt: %s", s, p)
 		}
+	}
+}
+
+func TestBuildClusterPrompt_IncludesSnippets(t *testing.T) {
+	c := models.Cluster{ID: 3, Label: "test", Size: 5, Density: 0.5, Coherence: 0.7}
+	snippets := []string{"quantum gates", "error correction"}
+	p := buildClusterPrompt(c, snippets)
+	for _, want := range snippets {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt missing snippet %q\nfull prompt: %s", want, p)
+		}
+	}
+	if !strings.Contains(p, "**Conclusion:**") {
+		t.Error("prompt should ask for **Conclusion:** paragraph")
 	}
 }
 
@@ -259,7 +273,7 @@ func TestReasonAboutTopology_ProducesFindings(t *testing.T) {
 	clusters := []models.Cluster{
 		{ID: 1, Label: "test cluster", Size: 10, Coherence: 0.6},
 	}
-	findings := r.ReasonAboutTopology(clusters, nil, nil)
+	findings := r.ReasonAboutTopology(clusters, nil, nil, nil)
 	if len(findings) != 1 {
 		t.Fatalf("want 1 finding, got %d", len(findings))
 	}
@@ -290,7 +304,7 @@ func TestReasonAboutTopology_BridgesAndMoatsTruncated(t *testing.T) {
 		moats = append(moats, models.Moat{ClusterA: i, ClusterB: i + 10, Distance: float64(i) * 0.1})
 	}
 
-	findings := r.ReasonAboutTopology(nil, bridges, moats)
+	findings := r.ReasonAboutTopology(nil, bridges, moats, nil)
 
 	// 0 clusters + 10 bridges + 5 moats = 15 calls
 	if callCount != 15 {
@@ -308,7 +322,7 @@ func TestReasonAboutTopology_SkipsOnAPIError(t *testing.T) {
 
 	r := New2(srv.URL, "key", "deepseek-chat")
 	clusters := []models.Cluster{{ID: 1, Label: "x", Coherence: 0.7}}
-	findings := r.ReasonAboutTopology(clusters, nil, nil)
+	findings := r.ReasonAboutTopology(clusters, nil, nil, nil)
 	if len(findings) != 0 {
 		t.Errorf("errors should be skipped; want 0 findings, got %d", len(findings))
 	}
@@ -323,7 +337,7 @@ func TestReasonAboutTopology_IsAnomalySetForLowCoherence(t *testing.T) {
 		{ID: 1, Label: "coherent", Coherence: 0.8},
 		{ID: 2, Label: "incoherent", Coherence: 0.3},
 	}
-	findings := r.ReasonAboutTopology(clusters, nil, nil)
+	findings := r.ReasonAboutTopology(clusters, nil, nil, nil)
 	if len(findings) != 2 {
 		t.Fatalf("want 2 findings, got %d", len(findings))
 	}

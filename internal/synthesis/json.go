@@ -29,15 +29,16 @@ type JSONSummary struct {
 }
 
 type JSONCluster struct {
-	ID         int       `json:"id"`
-	Label      string    `json:"label"`
-	Size       int       `json:"size"`
-	Density    float64   `json:"density"`
-	Coherence  float64   `json:"coherence"`
-	Centroid   []float32 `json:"centroid"`
-	VectorIDs  []uint64  `json:"vector_ids"`
-	Reasoning  string    `json:"reasoning"`
-	IsAnomaly  bool      `json:"is_anomaly"`
+	ID        int       `json:"id"`
+	Label     string    `json:"label"`
+	Source    string    `json:"source,omitempty"` // original layer/source-based label
+	Size      int       `json:"size"`
+	Density   float64   `json:"density"`
+	Coherence float64   `json:"coherence"`
+	Centroid  []float32 `json:"centroid"`
+	VectorIDs []uint64  `json:"vector_ids"`
+	Reasoning string    `json:"reasoning"`
+	IsAnomaly bool      `json:"is_anomaly"`
 }
 
 type JSONBridge struct {
@@ -45,6 +46,7 @@ type JSONBridge struct {
 	ClusterB  int     `json:"cluster_b"`
 	Strength  float64 `json:"strength"`
 	LinkType  string  `json:"link_type"`
+	Label     string  `json:"label,omitempty"` // short semantic description from R1 conclusion
 	Reasoning string  `json:"reasoning"`
 }
 
@@ -141,6 +143,7 @@ func (s *Synthesizer) GenerateJSON(
 		jClusters[i] = JSONCluster{
 			ID:        c.ID,
 			Label:     c.Label,
+			Source:    c.Source,
 			Size:      c.Size,
 			Density:   c.Density,
 			Coherence: c.Coherence,
@@ -159,6 +162,7 @@ func (s *Synthesizer) GenerateJSON(
 			ClusterB:  b.ClusterB,
 			Strength:  b.Strength,
 			LinkType:  b.LinkType,
+			Label:     b.Label,
 			Reasoning: bridgeReasoning[pair{b.ClusterA, b.ClusterB}],
 		}
 	}
