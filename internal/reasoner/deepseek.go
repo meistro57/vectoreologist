@@ -78,12 +78,18 @@ func (r *Reasoner) ReasonAboutTopology(
 	}
 
 	// Clusters
+	firstPromptPrinted := false
 	for _, cluster := range clusters {
 		done++
 		subject := fmt.Sprintf("Cluster %d: %s", cluster.ID, cluster.Label)
 		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
 		snippets := clusterSnippets(cluster, byID, 5)
-		resp, err := r.callDeepSeek(buildClusterPrompt(cluster, snippets))
+		prompt := buildClusterPrompt(cluster, snippets)
+		if !firstPromptPrinted {
+			fmt.Printf("\n\n--- R1 prompt (cluster %d) ---\n%s\n--- end prompt ---\n\n", cluster.ID, prompt)
+			firstPromptPrinted = true
+		}
+		resp, err := r.callDeepSeek(prompt)
 		if err != nil {
 			fmt.Printf("\n   Warning: cluster %d: %v\n", cluster.ID, err)
 			continue

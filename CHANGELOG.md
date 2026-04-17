@@ -20,6 +20,16 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   payload fragments from each cluster's member vectors and includes them in the R1 prompt so
   the model reasons about actual content rather than just topology metrics.
 
+### Fixed
+- **Conclusion parser now picks the last `**Conclusion:**` block** — R1 sometimes emits a
+  verbose summary block followed by a terse bolded one (e.g. "The cluster represents
+  **Common Surface Knowledge and Noise**."). `ExtractConclusionLabel` previously took the
+  first block and returned the wordy sentence; it now takes the last, so the promoted label
+  is the concise concept name R1 intended.
+- **R1 prompt dump on first cluster** — `ReasonAboutTopology` prints the full assembled
+  prompt for the first cluster (between `--- R1 prompt ---` delimiters) so it is trivial
+  to verify whether text snippets are reaching the model or not.
+
 ### Watch mode (`--watch <duration>`) — re-runs the full excavation pipeline on a configurable
   interval (e.g. `--watch 5m`, `--watch 1h`), writing a new timestamped report each cycle and
   printing a one-line elapsed-time summary per cycle to stdout. Stops cleanly on SIGINT/SIGTERM.

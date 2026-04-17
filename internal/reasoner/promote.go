@@ -13,7 +13,7 @@ import (
 // plain chat format (raw conclusion text).
 func ExtractConclusionLabel(reasoningChain string) string {
 	text := reasoningChain
-	if idx := strings.Index(text, "**Conclusion:**"); idx >= 0 {
+	if idx := strings.LastIndex(text, "**Conclusion:**"); idx >= 0 {
 		text = text[idx+len("**Conclusion:**"):]
 	}
 	text = strings.TrimSpace(text)

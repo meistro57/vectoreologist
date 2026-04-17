@@ -56,6 +56,16 @@ func TestExtractConclusionLabel_EmptyChain(t *testing.T) {
 	}
 }
 
+func TestExtractConclusionLabel_TakesLastBlock(t *testing.T) {
+	// R1 often emits a verbose block followed by a terse bolded one — we want the last.
+	chain := "**Thinking:**\nsome reasoning\n\n**Conclusion:**\nGiven its large size, this is a broad catch-all category for common, generic knowledge.\n\n**Conclusion:**\nThe cluster represents **Common Surface Knowledge and Noise**."
+	got := ExtractConclusionLabel(chain)
+	want := "The cluster represents Common Surface Knowledge and Noise."
+	if got != want {
+		t.Errorf("want %q, got %q", want, got)
+	}
+}
+
 // ---- PromoteClusterLabels ---------------------------------------------------
 
 func TestPromoteClusterLabels_ReplacesLabel(t *testing.T) {
