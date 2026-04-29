@@ -84,7 +84,7 @@ func (r *Reasoner) ReasonAboutTopology(
 		done++
 		subject := fmt.Sprintf("Cluster %d: %s", cluster.ID, cluster.Label)
 		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
-		snippets := clusterSnippets(cluster, byID, 5)
+		snippets := clusterSnippets(cluster, byID, 8)
 		prompt := buildClusterPrompt(cluster, snippets)
 		if !firstPromptPrinted {
 			fmt.Printf("\n\n--- R1 prompt (cluster %d) ---\n%s\n--- end prompt ---\n\n", cluster.ID, prompt)
@@ -224,17 +224,54 @@ Cluster Details:
 	return base
 }
 
-// clusterSnippets returns up to n non-empty text fragments from cluster members.
+// clusterSnippets returns up to n unique, non-empty text fragments from cluster
+// members. It samples evenly across the cluster rather than taking the first N,
+// and deduplicates to avoid feeding identical lines to the reasoner.
 func clusterSnippets(cluster models.Cluster, byID map[uint64]string, n int) []string {
+	ids := cluster.VectorIDs
+	if len(ids) == 0 {
+		return nil
+	}
+
+	// Step through the cluster at even intervals to get diversity.
+	step := len(ids) / (n * 3) // oversample 3x to account for dupes/missing
+	if step < 1 {
+		step = 1
+	}
+
+	seen := make(map[string]bool)
 	var out []string
-	for _, id := range cluster.VectorIDs {
-		if frag, ok := byID[id]; ok {
-			out = append(out, frag)
-			if len(out) >= n {
-				break
+	for i := 0; i < len(ids) && len(out) < n; i += step {
+		if frag, ok := byID[ids[i]]; ok {
+			// Truncate long fragments for the prompt.
+			if len(frag) > 200 {
+				frag = frag[:200] + "..."
+			}
+			if !seen[frag] {
+				seen[frag] = true
+				out = append(out, frag)
 			}
 		}
 	}
+
+	// If striding missed enough unique snippets, do a second pass.
+	if len(out) < n {
+		for _, id := range ids {
+			if len(out) >= n {
+				break
+			}
+			if frag, ok := byID[id]; ok {
+				if len(frag) > 200 {
+					frag = frag[:200] + "..."
+				}
+				if !seen[frag] {
+					seen[frag] = true
+					out = append(out, frag)
+				}
+			}
+		}
+	}
+
 	return out
 }
 

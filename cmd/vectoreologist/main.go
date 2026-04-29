@@ -36,6 +36,7 @@ type config struct {
 	deepseekModel  string
 	sampleStrategy string
 	semanticLabels bool
+	incremental    bool
 }
 
 // loadDotEnv reads a .env file and sets any variables not already in the environment.
@@ -73,29 +74,34 @@ func runOnce(cfg config) (string, error) {
 	exc := excavator.New(cfg.qdrantURL)
 	sampleStrat := excavator.SamplingStrategy(cfg.sampleStrategy)
 
+	// Resolve sample size: 0 means "use entire collection".
+	collSize, err := exc.CollectionSize(cfg.collection)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "   ⚠ Could not determine collection size: %v\n", err)
+		if cfg.sampleSize == 0 {
+			cfg.sampleSize = 5000 // fallback when we can't query size
+			fmt.Fprintf(os.Stderr, "   ⚠ Falling back to --sample %d\n", cfg.sampleSize)
+		}
+	} else {
+		fmt.Printf("   ✓ Collection size: %d vectors\n", collSize)
+		if cfg.sampleSize == 0 || uint64(cfg.sampleSize) > collSize {
+			cfg.sampleSize = int(collSize)
+		}
+	}
+
 	// For diverse sampling, extract a larger pool so MaxMin has room to maximise spread.
 	extractLimit := cfg.sampleSize
 	if sampleStrat == excavator.Diverse {
 		extractLimit = cfg.sampleSize * 3 / 2
-		if extractLimit > 10000 {
-			extractLimit = 10000
-		}
+	}
+
+	// Clamp to collection size if known.
+	if collSize > 0 && uint64(extractLimit) > collSize {
+		extractLimit = int(collSize)
 	}
 
 	target := extractLimit
-	collSize, err := exc.CollectionSize(cfg.collection)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "   ⚠ Could not determine collection size: %v\n", err)
-	} else {
-		fmt.Printf("   ✓ Collection size: %d vectors\n", collSize)
-		if uint64(extractLimit) >= collSize {
-			fmt.Printf("   ✓ Target sample: %d vectors (will extract all available)\n", cfg.sampleSize)
-			target = int(collSize)
-			extractLimit = target
-		} else {
-			fmt.Printf("   ✓ Target sample: %d vectors\n", cfg.sampleSize)
-		}
-	}
+	fmt.Printf("   ✓ Target sample: %d vectors (extracting %d)\n", cfg.sampleSize, extractLimit)
 	fmt.Printf("   ✓ Batch size: %d vectors\n", cfg.batchSize)
 
 	totalBatches := (target + cfg.batchSize - 1) / cfg.batchSize
@@ -107,7 +113,14 @@ func runOnce(cfg config) (string, error) {
 		fmt.Printf("   → Batch %d/%d: Extracted %d vectors (%.1f%%)\n", batchNum, totalBatches, fetched, pct)
 	}
 
-	vectors, metadata, err := exc.Extract(cfg.collection, extractLimit, cfg.batchSize, cfg.strict, onBatch)
+	var vectors [][]float32
+	var metadata []models.VectorMetadata
+	if cfg.incremental {
+		fmt.Println("   \u2139 Incremental mode: extracting only unstamped points")
+		vectors, metadata, err = exc.ExtractIncremental(cfg.collection, extractLimit, cfg.batchSize, cfg.strict, onBatch)
+	} else {
+		vectors, metadata, err = exc.Extract(cfg.collection, extractLimit, cfg.batchSize, cfg.strict, onBatch)
+	}
 	if err != nil {
 		return "", fmt.Errorf("extraction failed: %w", err)
 	}
@@ -172,6 +185,21 @@ func runOnce(cfg config) (string, error) {
 
 	fmt.Println()
 	fmt.Println("✨ Excavation Complete")
+
+	// Stamp analyzed points so --incremental skips them next time.
+	if len(metadata) > 0 {
+		runID := time.Now().UTC().Format(time.RFC3339)
+		ids := make([]uint64, len(metadata))
+		for i, m := range metadata {
+			ids[i] = m.ID
+		}
+		fmt.Printf("   📌 Stamping %d points with run ID %s\n", len(ids), runID)
+		if err := exc.StampPoints(cfg.collection, ids, runID); err != nil {
+			fmt.Fprintf(os.Stderr, "   ⚠ Failed to stamp points: %v\n", err)
+		} else {
+			fmt.Printf("   ✓ %d points stamped\n", len(ids))
+		}
+	}
 	fmt.Println()
 	fmt.Println("Key Insights:")
 	fmt.Printf("  • %d semantic concepts discovered\n", len(clusters))
@@ -188,7 +216,7 @@ func main() {
 	loadDotEnv(".env")
 	showVersion   := flag.Bool("version",        false,                        "Print version and exit")
 	collection    := flag.String("collection",   "",                           "Qdrant collection name (required)")
-	sampleSize    := flag.Int("sample",          5000,                         "Number of vectors to sample")
+	sampleSize    := flag.Int("sample",          0,                            "Number of vectors to sample (0 = entire collection)")
 	batchSize     := flag.Int("batch-size",      5000,                         "Vectors per batch during extraction")
 	strict        := flag.Bool("strict",         false,                        "Fail immediately if any batch errors (default: stop early and continue)")
 	outputPath    := flag.String("output",       "./findings",                 "Output directory for reports")
@@ -199,6 +227,7 @@ func main() {
 	watchInterval  := flag.String("watch",            "",                   "Re-run on this interval (e.g. 5m, 1h). Stops on SIGINT/SIGTERM.")
 	sampleStrategy := flag.String("sample-strategy",  "random",             "Sampling strategy: random, stratified, diverse")
 	semanticLabels := flag.Bool("semantic-labels",    false,                "Generate semantic cluster labels via DeepSeek (requires --deepseek-key)")
+	incremental    := flag.Bool("incremental",        false,                "Only extract unstamped points (skip previously analyzed)")
 	flag.Parse()
 
 	if *showVersion {
@@ -212,7 +241,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *batchSize > *sampleSize {
+	if *sampleSize > 0 && *batchSize > *sampleSize {
 		*batchSize = *sampleSize
 	}
 
@@ -243,6 +272,7 @@ func main() {
 		deepseekModel:  *deepseekModel,
 		sampleStrategy: *sampleStrategy,
 		semanticLabels: *semanticLabels,
+		incremental:    *incremental,
 	}
 
 	// Watch mode

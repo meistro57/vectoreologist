@@ -9,7 +9,8 @@ import (
 
 // diversePoolCap limits the candidate pool fed to MaxMin sampling.
 // MaxMin is O(pool × target × dims), so capping keeps it practical.
-const diversePoolCap = 3000
+// Raised from 3000 to 15000 to support larger collections.
+const diversePoolCap = 15000
 
 // SamplingStrategy determines how vectors are selected from a collection
 type SamplingStrategy string
