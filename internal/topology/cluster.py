@@ -58,7 +58,17 @@ def main():
 
     n_neighbors      = int(params.get("n_neighbors", 15))
     min_dist         = float(params.get("min_dist", 0.1))
-    min_cluster_size = max(2, len(vectors) // 100)
+
+    # For high-dimensional vectors (>1000 dims), use more components and
+    # a smaller min_cluster_size to avoid collapsing into too few clusters.
+    n_dims = vectors.shape[1] if len(vectors.shape) > 1 else 1
+    if n_dims > 1000:
+        n_components     = 10   # more structure preserved from 3072-dim space
+        min_cluster_size = max(2, len(vectors) // 200)  # smaller = more clusters
+        n_neighbors      = max(n_neighbors, 30)  # wider neighborhood for dense space
+    else:
+        n_components     = 2
+        min_cluster_size = max(2, len(vectors) // 100)
 
     # Clamp UMAP n_neighbors: must be < n_samples.
     n_neighbors = min(n_neighbors, n_samples - 1)
@@ -71,7 +81,7 @@ def main():
     reducer   = umap.UMAP(
         n_neighbors=n_neighbors,
         min_dist=min_dist,
-        n_components=2,
+        n_components=n_components,
         random_state=42,
         verbose=False,
     )

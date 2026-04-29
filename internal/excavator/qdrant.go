@@ -127,11 +127,29 @@ func extractPoint(point *qdrant.RetrievedPoint) ([]float32, models.VectorMetadat
 		return nil, models.VectorMetadata{}, false
 	}
 
+	// Try multiple source field names to support different collection schemas
+	source := getPayloadString(point.Payload, "source", "")
+	if source == "" {
+		source = getPayloadString(point.Payload, "source_file", "")
+	}
+	if source == "" {
+		source = getPayloadString(point.Payload, "source_collection", "unknown")
+	}
+
+	// Use summary or claims as the fragment if text field is absent
+	fragment := getPayloadString(point.Payload, "text", "")
+	if fragment == "" {
+		fragment = getPayloadString(point.Payload, "summary", "")
+	}
+	if fragment == "" {
+		fragment = "N/A"
+	}
+
 	meta := models.VectorMetadata{
 		ID:       point.Id.GetNum(),
-		Fragment: getPayloadString(point.Payload, "text", "N/A"),
-		Source:   getPayloadString(point.Payload, "source", "unknown"),
-		Layer:    getPayloadString(point.Payload, "layer", "surface"),
+		Fragment: fragment,
+		Source:   source,
+		Layer:    getPayloadString(point.Payload, "layer", getPayloadString(point.Payload, "tone", "surface")),
 		RunID:    getPayloadString(point.Payload, "run_id", ""),
 	}
 	return vec, meta, true

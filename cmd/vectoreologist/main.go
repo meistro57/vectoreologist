@@ -127,7 +127,7 @@ func runOnce(cfg config) (string, error) {
 		clusters = labeler.LabelClusters(clusters, metadata)
 	}
 
-	bridges := topo.FindBridges(clusters)
+	bridges := topo.FindBridges(clusters, vectors, metadata)
 	moats := topo.FindMoats(clusters)
 	fmt.Printf("   ✓ Identified %d concept clusters\n", len(clusters))
 	fmt.Printf("   ✓ Found %d domain bridges\n", len(bridges))

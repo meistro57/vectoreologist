@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"os/exec"
+	"sort"
 
 	"github.com/meistro57/vectoreologist/internal/models"
 )
@@ -128,23 +130,90 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 	return clusters
 }
 
-// FindBridges identifies semantic connections between clusters.
-func (t *Topology) FindBridges(clusters []models.Cluster) []models.Bridge {
+// FindBridges identifies semantic connections between clusters and populates
+// SampleLinks with representative cross-cluster chunk pairs.
+func (t *Topology) FindBridges(clusters []models.Cluster, vectors [][]float32, metadata []models.VectorMetadata) []models.Bridge {
+	idToVec := make(map[uint64][]float32, len(metadata))
+	for i, m := range metadata {
+		if i < len(vectors) {
+			idToVec[m.ID] = vectors[i]
+		}
+	}
+
 	bridges := []models.Bridge{}
 	for i := 0; i < len(clusters); i++ {
 		for j := i + 1; j < len(clusters); j++ {
 			sim := cosineSimilarity(clusters[i].Centroid, clusters[j].Centroid)
 			if sim > 0.3 {
+				links := computeSampleLinks(clusters[i].VectorIDs, clusters[j].VectorIDs, idToVec, 5)
 				bridges = append(bridges, models.Bridge{
-					ClusterA: clusters[i].ID,
-					ClusterB: clusters[j].ID,
-					Strength: sim,
-					LinkType: classifyLink(sim),
+					ClusterA:    clusters[i].ID,
+					ClusterB:    clusters[j].ID,
+					Strength:    sim,
+					LinkType:    classifyLink(sim),
+					SampleLinks: links,
 				})
 			}
 		}
 	}
 	return bridges
+}
+
+type vecEntry struct {
+	id  uint64
+	vec []float32
+}
+
+// gatherVecs collects up to limit vectors from the lookup for the given IDs.
+// When there are more IDs than the limit, it shuffles first so the sample
+// is drawn from across the cluster rather than always from the first N.
+func gatherVecs(ids []uint64, lookup map[uint64][]float32, limit int) []vecEntry {
+	if len(ids) > limit {
+		shuffled := make([]uint64, len(ids))
+		copy(shuffled, ids)
+		rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+		ids = shuffled
+	}
+	out := make([]vecEntry, 0, min(len(ids), limit))
+	for _, id := range ids {
+		if vec, ok := lookup[id]; ok {
+			out = append(out, vecEntry{id, vec})
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// computeSampleLinks returns the top-n cross-cluster pairs by cosine similarity.
+// At most 50 points per side are compared to bound cost on large clusters.
+func computeSampleLinks(aIDs, bIDs []uint64, idToVec map[uint64][]float32, n int) []models.SampleLink {
+	const perSide = 50
+	aVecs := gatherVecs(aIDs, idToVec, perSide)
+	bVecs := gatherVecs(bIDs, idToVec, perSide)
+	if len(aVecs) == 0 || len(bVecs) == 0 {
+		return nil
+	}
+	type scored struct {
+		aID, bID uint64
+		sim      float64
+	}
+	pairs := make([]scored, 0, len(aVecs)*len(bVecs))
+	for _, a := range aVecs {
+		for _, b := range bVecs {
+			pairs = append(pairs, scored{a.id, b.id, cosineSimilarity(a.vec, b.vec)})
+		}
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].sim > pairs[j].sim })
+	if len(pairs) > n {
+		pairs = pairs[:n]
+	}
+	links := make([]models.SampleLink, len(pairs))
+	for i, p := range pairs {
+		links[i] = models.SampleLink{ChunkAID: p.aID, ChunkBID: p.bID, Similarity: p.sim}
+	}
+	return links
 }
 
 // FindMoats identifies isolated cluster pairs.

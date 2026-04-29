@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/meistro57/vectoreologist/internal/models"
@@ -109,7 +110,7 @@ func (r *Reasoner) ReasonAboutTopology(
 		done++
 		subject := fmt.Sprintf("Bridge: %d ↔ %d", bridge.ClusterA, bridge.ClusterB)
 		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
-		resp, err := r.callDeepSeek(buildBridgePrompt(bridge))
+		resp, err := r.callDeepSeek(buildBridgePrompt(bridge, byID))
 		if err != nil {
 			continue
 		}
@@ -156,7 +157,7 @@ func (r *Reasoner) callDeepSeek(prompt string) (*deepSeekResponse, error) {
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
-		"temperature": 0.7,
+		"temperature": 0,
 	}
 
 	jsonData, _ := json.Marshal(reqBody)
@@ -237,14 +238,32 @@ func clusterSnippets(cluster models.Cluster, byID map[uint64]string, n int) []st
 	return out
 }
 
-func buildBridgePrompt(bridge models.Bridge) string {
-	return fmt.Sprintf(`Analyze this semantic bridge between vector clusters:
+func buildBridgePrompt(bridge models.Bridge, byID map[uint64]string) string {
+	var aSnips, bSnips []string
+	seen := make(map[string]bool)
+	for _, sl := range bridge.SampleLinks {
+		if t, ok := byID[sl.ChunkAID]; ok && !seen[t] {
+			aSnips = append(aSnips, t)
+			seen[t] = true
+		}
+		if t, ok := byID[sl.ChunkBID]; ok && !seen[t] {
+			bSnips = append(bSnips, t)
+			seen[t] = true
+		}
+	}
 
-Strength: %.2f (%s)
-Connecting: Cluster %d ↔ Cluster %d
-
-In 1-2 sentences: why does this connection exist?`,
+	prompt := fmt.Sprintf("Analyze this semantic bridge between vector clusters:\n\nStrength: %.2f (%s)\nCluster %d ↔ Cluster %d\n",
 		bridge.Strength, bridge.LinkType, bridge.ClusterA, bridge.ClusterB)
+
+	if len(aSnips) > 0 {
+		prompt += fmt.Sprintf("\nCluster %d samples:\n• %s\n", bridge.ClusterA, strings.Join(aSnips, "\n• "))
+	}
+	if len(bSnips) > 0 {
+		prompt += fmt.Sprintf("\nCluster %d samples:\n• %s\n", bridge.ClusterB, strings.Join(bSnips, "\n• "))
+	}
+
+	prompt += "\nIn 2-3 sentences: what shared concept bridges these two clusters? End with a **Conclusion:** naming the bridge concept."
+	return prompt
 }
 
 func buildMoatPrompt(moat models.Moat) string {

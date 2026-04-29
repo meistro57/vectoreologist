@@ -21,13 +21,21 @@ type Cluster struct {
 	Coherence float64
 }
 
+// SampleLink is a representative cross-cluster chunk pair that justifies a bridge.
+type SampleLink struct {
+	ChunkAID   uint64  `json:"chunk_a_id"`
+	ChunkBID   uint64  `json:"chunk_b_id"`
+	Similarity float64 `json:"similarity"`
+}
+
 // Bridge represents a semantic connection between clusters
 type Bridge struct {
-	ClusterA int
-	ClusterB int
-	Strength float64
-	LinkType string
-	Label    string // short semantic description from R1 conclusion, if available
+	ClusterA    int
+	ClusterB    int
+	Strength    float64
+	LinkType    string
+	Label       string // short semantic description from R1 conclusion, if available
+	SampleLinks []SampleLink
 }
 
 // Moat represents isolation between knowledge domains

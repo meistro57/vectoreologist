@@ -21,6 +21,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   the model reasons about actual content rather than just topology metrics.
 
 ### Fixed
+- **Bridge prompts now include actual content** — `buildBridgePrompt` previously passed only
+  cluster IDs and a strength float to R1, producing generic placeholder reasoning chains. It
+  now accepts the `byID` fragment map and injects text snippets from both sides of the bridge
+  via the pre-computed `Bridge.SampleLinks` (top-5 cross-cluster vector pairs), mirroring how
+  cluster prompts already worked. Bridge reasoning chains now reflect actual cross-tradition
+  content rather than "Clusters N and M may share metaphysical vocabulary."
+- **R1 temperature set to 0** — `callDeepSeek` hardcoded `temperature: 0.7` for all calls
+  including DeepSeek-Reasoner (R1). R1 uses chain-of-thought internally and is a deterministic
+  reasoning model; 0.7 added noise without improving output quality. Temperature is now 0.
 - **Conclusion parser now picks the last `**Conclusion:**` block** — R1 sometimes emits a
   verbose summary block followed by a terse bolded one (e.g. "The cluster represents
   **Common Surface Knowledge and Noise**."). `ExtractConclusionLabel` previously took the

@@ -119,7 +119,7 @@ func TestClassifyLink_StrictBoundaries(t *testing.T) {
 
 func TestFindBridges_Empty(t *testing.T) {
 	top := New()
-	got := top.FindBridges(nil)
+	got := top.FindBridges(nil, nil, nil)
 	if len(got) != 0 {
 		t.Errorf("empty input: want 0 bridges, got %d", len(got))
 	}
@@ -128,7 +128,7 @@ func TestFindBridges_Empty(t *testing.T) {
 func TestFindBridges_SingleCluster(t *testing.T) {
 	top := New()
 	c := models.Cluster{ID: 1, Centroid: []float32{1, 0}}
-	got := top.FindBridges([]models.Cluster{c})
+	got := top.FindBridges([]models.Cluster{c}, nil, nil)
 	if len(got) != 0 {
 		t.Errorf("single cluster: want 0 bridges, got %d", len(got))
 	}
@@ -139,7 +139,7 @@ func TestFindBridges_HighSimilarity(t *testing.T) {
 	// Nearly identical centroids → similarity > 0.3 → bridge.
 	c1 := models.Cluster{ID: 1, Centroid: []float32{1, 0, 0}}
 	c2 := models.Cluster{ID: 2, Centroid: []float32{1, 0, 0}}
-	got := top.FindBridges([]models.Cluster{c1, c2})
+	got := top.FindBridges([]models.Cluster{c1, c2}, nil, nil)
 	if len(got) != 1 {
 		t.Fatalf("want 1 bridge, got %d", len(got))
 	}
@@ -153,7 +153,7 @@ func TestFindBridges_LowSimilarity(t *testing.T) {
 	// Orthogonal centroids → similarity = 0.0 → no bridge.
 	c1 := models.Cluster{ID: 1, Centroid: []float32{1, 0}}
 	c2 := models.Cluster{ID: 2, Centroid: []float32{0, 1}}
-	got := top.FindBridges([]models.Cluster{c1, c2})
+	got := top.FindBridges([]models.Cluster{c1, c2}, nil, nil)
 	if len(got) != 0 {
 		t.Errorf("orthogonal centroids: want 0 bridges, got %d", len(got))
 	}
@@ -164,7 +164,7 @@ func TestFindBridges_StrengthAndLinkType(t *testing.T) {
 	// Identical unit vectors → sim = 1.0 → strong_semantic.
 	c1 := models.Cluster{ID: 1, Centroid: []float32{1, 0}}
 	c2 := models.Cluster{ID: 2, Centroid: []float32{1, 0}}
-	got := top.FindBridges([]models.Cluster{c1, c2})
+	got := top.FindBridges([]models.Cluster{c1, c2}, nil, nil)
 	if len(got) != 1 {
 		t.Fatalf("want 1 bridge, got %d", len(got))
 	}
@@ -182,7 +182,7 @@ func TestFindBridges_NoDuplicatePairs(t *testing.T) {
 	c1 := models.Cluster{ID: 1, Centroid: []float32{1, 0}}
 	c2 := models.Cluster{ID: 2, Centroid: []float32{1, 0}}
 	c3 := models.Cluster{ID: 3, Centroid: []float32{1, 0}}
-	got := top.FindBridges([]models.Cluster{c1, c2, c3})
+	got := top.FindBridges([]models.Cluster{c1, c2, c3}, nil, nil)
 	if len(got) != 3 {
 		t.Errorf("want 3 bridges for 3 similar clusters, got %d", len(got))
 	}
@@ -194,6 +194,55 @@ func TestFindBridges_NoDuplicatePairs(t *testing.T) {
 			t.Errorf("duplicate bridge pair (%d,%d)", b.ClusterA, b.ClusterB)
 		}
 		seen[key] = true
+	}
+}
+
+func TestFindBridges_SampleLinks(t *testing.T) {
+	top := New()
+	// Two clusters with known member vectors; centroids are > 0.3 similar → bridge.
+	c1 := models.Cluster{
+		ID:        1,
+		Centroid:  []float32{1, 0, 0},
+		VectorIDs: []uint64{10, 11},
+	}
+	c2 := models.Cluster{
+		ID:        2,
+		Centroid:  []float32{0.9, 0.4, 0},
+		VectorIDs: []uint64{20, 21},
+	}
+	vectors := [][]float32{
+		{1, 0, 0},      // id 10 — cluster 1
+		{0.95, 0.1, 0}, // id 11 — cluster 1
+		{0.9, 0.4, 0},  // id 20 — cluster 2
+		{0.85, 0.5, 0}, // id 21 — cluster 2
+	}
+	metadata := []models.VectorMetadata{
+		{ID: 10}, {ID: 11}, {ID: 20}, {ID: 21},
+	}
+
+	got := top.FindBridges([]models.Cluster{c1, c2}, vectors, metadata)
+	if len(got) != 1 {
+		t.Fatalf("want 1 bridge, got %d", len(got))
+	}
+	b := got[0]
+	if b.Strength <= 0 || b.Strength > 1 {
+		t.Errorf("Strength out of range [0,1]: %v", b.Strength)
+	}
+	if len(b.SampleLinks) == 0 {
+		t.Fatal("want at least 1 sample link, got 0")
+	}
+	aSet := map[uint64]bool{10: true, 11: true}
+	bSet := map[uint64]bool{20: true, 21: true}
+	for _, sl := range b.SampleLinks {
+		if !aSet[sl.ChunkAID] {
+			t.Errorf("ChunkAID %d not from cluster 1 (want 10 or 11)", sl.ChunkAID)
+		}
+		if !bSet[sl.ChunkBID] {
+			t.Errorf("ChunkBID %d not from cluster 2 (want 20 or 21)", sl.ChunkBID)
+		}
+		if sl.Similarity <= 0 {
+			t.Errorf("SampleLink similarity should be > 0, got %v", sl.Similarity)
+		}
 	}
 }
 

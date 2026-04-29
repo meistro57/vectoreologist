@@ -243,9 +243,15 @@ func TestBuildClusterPrompt_IncludesSnippets(t *testing.T) {
 }
 
 func TestBuildBridgePrompt_ContainsFields(t *testing.T) {
-	b := models.Bridge{ClusterA: 3, ClusterB: 9, Strength: 0.72, LinkType: "strong_semantic"}
-	p := buildBridgePrompt(b)
-	for _, s := range []string{"3", "9", "0.72", "strong_semantic"} {
+	b := models.Bridge{
+		ClusterA: 3, ClusterB: 9, Strength: 0.72, LinkType: "strong_semantic",
+		SampleLinks: []models.SampleLink{
+			{ChunkAID: 10, ChunkBID: 20, Similarity: 0.8},
+		},
+	}
+	byID := map[uint64]string{10: "snippet from cluster A", 20: "snippet from cluster B"}
+	p := buildBridgePrompt(b, byID)
+	for _, s := range []string{"3", "9", "0.72", "strong_semantic", "snippet from cluster A", "snippet from cluster B", "**Conclusion:**"} {
 		if !strings.Contains(p, s) {
 			t.Errorf("bridge prompt missing %q", s)
 		}

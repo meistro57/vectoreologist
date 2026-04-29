@@ -41,13 +41,20 @@ type JSONCluster struct {
 	IsAnomaly bool      `json:"is_anomaly"`
 }
 
+type JSONSampleLink struct {
+	ChunkAID   uint64  `json:"chunk_a_id"`
+	ChunkBID   uint64  `json:"chunk_b_id"`
+	Similarity float64 `json:"similarity"`
+}
+
 type JSONBridge struct {
-	ClusterA  int     `json:"cluster_a"`
-	ClusterB  int     `json:"cluster_b"`
-	Strength  float64 `json:"strength"`
-	LinkType  string  `json:"link_type"`
-	Label     string  `json:"label,omitempty"` // short semantic description from R1 conclusion
-	Reasoning string  `json:"reasoning"`
+	ClusterA    int              `json:"cluster_a"`
+	ClusterB    int              `json:"cluster_b"`
+	Strength    float64          `json:"strength"`
+	LinkType    string           `json:"link_type"`
+	Label       string           `json:"label,omitempty"` // short semantic description from R1 conclusion
+	SampleLinks []JSONSampleLink `json:"sample_links"`
+	Reasoning   string           `json:"reasoning"`
 }
 
 type JSONMoat struct {
@@ -158,12 +165,13 @@ func (s *Synthesizer) GenerateJSON(
 	jBridges := make([]JSONBridge, len(bridges))
 	for i, b := range bridges {
 		jBridges[i] = JSONBridge{
-			ClusterA:  b.ClusterA,
-			ClusterB:  b.ClusterB,
-			Strength:  b.Strength,
-			LinkType:  b.LinkType,
-			Label:     b.Label,
-			Reasoning: bridgeReasoning[pair{b.ClusterA, b.ClusterB}],
+			ClusterA:    b.ClusterA,
+			ClusterB:    b.ClusterB,
+			Strength:    b.Strength,
+			LinkType:    b.LinkType,
+			Label:       b.Label,
+			SampleLinks: toJSONSampleLinks(b.SampleLinks),
+			Reasoning:   bridgeReasoning[pair{b.ClusterA, b.ClusterB}],
 		}
 	}
 
@@ -212,6 +220,16 @@ func parseClusterID(subject string) int {
 	var id int
 	fmt.Sscanf(subject, "Cluster %d", &id)
 	return id
+}
+
+// toJSONSampleLinks converts model sample links to their JSON representation.
+// Returns an empty (non-nil) slice so JSON marshaling produces [] rather than null.
+func toJSONSampleLinks(links []models.SampleLink) []JSONSampleLink {
+	out := make([]JSONSampleLink, len(links))
+	for i, l := range links {
+		out[i] = JSONSampleLink{ChunkAID: l.ChunkAID, ChunkBID: l.ChunkBID, Similarity: l.Similarity}
+	}
+	return out
 }
 
 // parsePair extracts two integer IDs from subjects like "Bridge: A ↔ B" or "Moat: A ⊥ B".
