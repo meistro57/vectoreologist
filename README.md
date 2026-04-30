@@ -1,56 +1,44 @@
 # Vectoreologist
 
-**vec·tor·e·ol·o·gist** | /ˌvɛk·tər·ɪˈɒl·ə·dʒɪst/ | *noun*
+**vec·tor·e·ol·o·gist** | /ˌvɛk·tər·ɪˈɒl·ə·dʒɪst/ | *noun*  
 > One who excavates meaning from the geometry of thought.
-
----
-
-Your vector database isn't just storage — it's a **fossilized map of how your AI thinks**. Vectoreologist is the tool that reads it.
-
-It digs into your Qdrant collections, maps the hidden topology of your embeddings with UMAP + HDBSCAN, and unleashes DeepSeek R1 to reason — out loud, chain-of-thought and all — about what every cluster, bridge, and knowledge gap actually *means*. No black boxes. No vibes. Just visible reasoning about the structure of your semantic universe.
-
-Then **Vectoreologist Lens** lets you navigate those findings interactively — scroll through clusters, jump between semantic bridges, inspect anomalies, and fuzzy-search your entire knowledge topology from a slick terminal UI.
 
 [![CI](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml/badge.svg)](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml)
 
+Vectoreologist analyzes embedding topology in Qdrant collections using UMAP + HDBSCAN, detects anomalies, runs DeepSeek reasoning over the topology, writes timestamped markdown + JSON reports, stores findings in Qdrant, and includes a terminal lens for interactive exploration.
+
 ---
 
-## What It Does
+## What it does
 
-Vectoreologist applies knowledge archaeology to **vector embeddings themselves**, not the source text. It:
-
-1. **Excavates** vectors + metadata from any Qdrant collection
-2. **Maps topology** with real UMAP dimensionality reduction + HDBSCAN clustering — finds the clusters your data actually forms, not the ones you assumed
-3. **Detects anomalies** — incoherent clusters, orphaned concepts, density outliers, source contradictions — the weird stuff worth investigating
-4. **Reasons visibly** via DeepSeek R1: every cluster, every top bridge, every moat gets a full chain-of-thought + conclusion printed live to your terminal
-5. **Synthesizes** everything into timestamped markdown **and JSON** reports, then stores findings back to Qdrant
-6. **Explores interactively** with Vectoreologist Lens — a terminal UI for navigating clusters, bridges, anomalies, and reasoning chains
+1. **Extracts vectors + metadata** from a Qdrant collection over gRPC
+2. **Samples vectors** with `random`, `stratified`, or `diverse` strategy
+3. **Maps topology** with embedded Python (`umap-learn` + `hdbscan`)
+4. **Finds structures**: clusters, semantic bridges, and moats
+5. **Detects anomalies**: cluster anomalies, orphans, and source contradictions
+6. **Reasons with DeepSeek** (R1 by default, chat model optional)
+7. **Synthesizes outputs** to `findings/vectoreology_<timestamp>.md` and `.json`
+8. **Stores findings** in Qdrant collection `vectoreology_findings`
+9. **Supports incremental runs** by stamping processed points and skipping stamped points on later runs
+10. **Supports watch mode** for repeated excavation on a schedule
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  vectoreologist  (Go CLI)                                │
-├──────────────────────────────────────────────────────────┤
-│  1. Excavation      Qdrant gRPC → vectors + metadata     │
-│  2. Topology        UMAP + HDBSCAN (embedded Python)     │
-│  3. Anomaly         coherence / density / orphan / moat  │
-│  4. Reasoning       DeepSeek R1 — visible chains         │
-│  5. Synthesis       findings/TIMESTAMP.{md,json}         │
-└──────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────┐
-│  vectoreologist-lens  (Bubbletea TUI)                    │
-├──────────────────────────────────────────────────────────┤
-│  Clusters  │  Bridges  │  Anomalies  │  Search           │
-│  ↑↓ navigate · b/a/c switch views · / search · q quit   │
-└──────────────────────────────────────────────────────────┘
+vectoreologist (Go CLI)
+  ├─ Phase 1: Excavation (Qdrant gRPC scroll, batched)
+  ├─ Phase 2: Topology (embedded cluster.py: UMAP + HDBSCAN)
+  ├─ Phase 3: Anomaly detection
+  ├─ Phase 4: DeepSeek reasoning
+  └─ Phase 5: Synthesis (Markdown + JSON + Qdrant findings upsert)
+
+vectoreologist-lens (Bubble Tea TUI)
+  └─ Explore JSON reports: clusters, bridges, anomalies, search, export
 ```
 
-The Python clustering script is **embedded in the Go binary** — no separate installation step needed beyond the pip packages.
+`internal/topology/cluster.py` is embedded into the binary and executed at runtime via `python3`.
 
 ---
 
@@ -58,13 +46,13 @@ The Python clustering script is **embedded in the Go binary** — no separate in
 
 | Dependency | Version | Purpose |
 |---|---|---|
-| Go | 1.23+ | Build the binary |
-| Python | 3.10+ | UMAP + HDBSCAN clustering |
+| Go | 1.23+ | Build binaries |
+| Python | 3.10+ | Run embedded clustering script |
 | umap-learn | latest | Dimensionality reduction |
-| hdbscan | latest | Density-based clustering |
-| numpy | latest | Vector math |
-| Qdrant | any | Vector database |
-| DeepSeek API key | — | R1 reasoning (optional) |
+| hdbscan | latest | Clustering |
+| numpy | latest | Numeric ops |
+| Qdrant | running instance | Vector source + findings storage |
+| DeepSeek API key | optional | Reasoning + semantic labels |
 
 ```bash
 pip install umap-learn hdbscan numpy
@@ -78,152 +66,142 @@ pip install umap-learn hdbscan numpy
 git clone https://github.com/meistro57/vectoreologist.git
 cd vectoreologist
 make deps
-make all        # builds both vectoreologist and vectoreologist-lens
+make all
 ```
+
+Binaries:
+- `./vectoreologist`
+- `./vectoreologist-lens`
 
 ---
 
 ## Configuration
 
-Create a `.env` file (loaded automatically at startup):
+A local `.env` is loaded automatically before flags are parsed (without overriding already-set environment vars):
 
 ```bash
 DEEPSEEK_API_KEY=your_key_here
 QDRANT_URL=http://localhost:6333
 ```
 
-Or pass everything as flags.
+If no DeepSeek key is provided, topology/anomaly phases still run and reasoning is skipped.
 
 ---
 
 ## Usage
 
 ```bash
-# Full pipeline — default settings
-./vectoreologist --collection kae_chunks --sample 5000
+# Full collection (sample=0 means all vectors)
+./vectoreologist --collection kae_chunks
 
-# Specify endpoints explicitly
-./vectoreologist \
-  --collection kae_chunks \
-  --sample 5000 \
-  --output ./findings \
-  --qdrant-url http://localhost:6333 \
-  --deepseek-key $DEEPSEEK_API_KEY
+# Fixed sample size with diverse sampling
+./vectoreologist --collection kae_chunks --sample 5000 --sample-strategy diverse
 
-# Fast mode — DeepSeek V3 instead of R1 (no chain-of-thought)
+# Incremental mode: only process unstamped points
+./vectoreologist --collection kae_chunks --incremental
+
+# Generate semantic labels using DeepSeek
+./vectoreologist --collection kae_chunks --semantic-labels --deepseek-key "$DEEPSEEK_API_KEY"
+
+# Watch mode: rerun every 5 minutes
+./vectoreologist --collection kae_chunks --watch 5m
+
+# Fast reasoning model
 ./vectoreologist --collection kae_chunks --deepseek-model deepseek-chat
 
-# Print version
+# Version
 ./vectoreologist --version
 ```
 
-### All flags
+### Flags
 
 | Flag | Default | Description |
 |---|---|---|
 | `--collection` | _(required)_ | Qdrant collection name |
-| `--sample` | `5000` | Max vectors to sample |
-| `--output` | `./findings` | Report output directory |
-| `--qdrant-url` | `http://localhost:6333` | Qdrant server URL |
-| `--deepseek-key` | `$DEEPSEEK_API_KEY` | DeepSeek API key |
+| `--sample` | `0` | Number of vectors to sample (`0` = entire collection) |
+| `--batch-size` | `5000` | Extraction batch size |
+| `--strict` | `false` | Fail immediately on batch errors |
+| `--output` | `./findings` | Output directory |
+| `--qdrant-url` | env `QDRANT_URL` or `http://localhost:6333` | Qdrant URL |
+| `--deepseek-key` | env `DEEPSEEK_API_KEY` | DeepSeek API key |
 | `--deepseek-url` | `https://api.deepseek.com/v1` | DeepSeek API base URL |
-| `--deepseek-model` | `deepseek-reasoner` | `deepseek-reasoner` (R1, full chains) or `deepseek-chat` (fast) |
-| `--version` | — | Print version and exit |
+| `--deepseek-model` | `deepseek-reasoner` | Reasoner model (`deepseek-reasoner` or `deepseek-chat`) |
+| `--watch` | unset | Repeat run interval (`5m`, `1h`, etc.) |
+| `--sample-strategy` | `random` | `random`, `stratified`, `diverse` |
+| `--semantic-labels` | `false` | Generate semantic cluster labels via DeepSeek |
+| `--incremental` | `false` | Only extract unstamped points |
+| `--version` | `false` | Print version and exit |
 
 ---
 
 ## Output
 
-**Console** — live progress with R1 thinking chains printed as they arrive:
+Each run emits:
 
-```
-🏺 Vectoreologist - Excavating kae_chunks from http://localhost:6333
-
-📡 Phase 1: Vector Excavation
-   ✓ Extracted 5000 vectors with metadata
-
-🗺️  Phase 2: Topology Analysis
-   ℹ 1224/5000 vectors classified as noise
-   ✓ Identified 22 concept clusters
-   ✓ Found 205 domain bridges
-   ✓ Detected 0 knowledge moats
-
-⚠️  Phase 3: Anomaly Detection
-   ✓ Found 11 cluster anomalies
-   ✓ Found 0 orphaned clusters
-   ✓ Found 0 source contradictions
-
-🧠 Phase 4: DeepSeek R1 Reasoning
-   reasoning 1/32: Cluster 1: surface / kae_chunks ...
-
-   --- thinking: Cluster 1: surface / kae_chunks ---
-   Let me analyze this cluster carefully...
-   ---
-
-   ✓ reasoning complete (32/32)
-
-📝 Phase 5: Synthesis & Storage
-   ✓ Report written to findings/vectoreology_2026-04-14_21-27-41.md
-   ✓ JSON written to findings/vectoreology_2026-04-14_21-27-41.json
-   ✓ Findings stored in vectoreology_findings collection
-```
-
-**Files written** to `findings/vectoreology_TIMESTAMP.{md,json}`:
-- Markdown: cluster analysis with full R1 `**Thinking:**` / `**Conclusion:**` blocks, top bridges, moats, anomalies
-- JSON: structured findings with reasoning attached to each cluster/bridge/moat — consumed by Vectoreologist Lens
+- Console phase progress and summary
+- Markdown report: `findings/vectoreology_<timestamp>.md`
+- JSON report: `findings/vectoreology_<timestamp>.json`
+- Qdrant findings upsert to collection `vectoreology_findings`
+- Point stamping payload `vectoreology_last_run=<RFC3339>` on processed source points
 
 ---
 
 ## Vectoreologist Lens
 
-Interactive TUI for exploring findings without leaving your terminal.
+Open a generated JSON report:
 
 ```bash
-# Generate a report first
-./vectoreologist --collection kae_chunks --sample 5000
-
-# Then explore it
-./vectoreologist-lens findings/vectoreology_*.json
+./vectoreologist-lens findings/vectoreology_2026-04-15_14-30-00.json
 ```
 
-**Keybindings:**
+### Keybindings
 
 | Key | Action |
 |---|---|
-| `↑↓` / `jk` | Navigate list |
+| `↑↓` / `jk` | Move selection |
 | `JK` | Scroll detail panel |
-| `c` | Cluster view |
-| `b` | Bridge view |
-| `a` | Anomaly view |
-| `/` | Fuzzy search |
+| `tab` | Cycle views |
+| `c` / `b` / `a` | Cluster / bridge / anomaly view |
+| `/` | Enter search |
+| `enter` | Jump to selected search result |
+| `esc` | Exit search / menus |
 | `f` | Toggle anomalies-only filter |
-| `s` | Cycle sort (coherence / density / size / id) |
-| `r` | Reload report from disk |
+| `s` | Cycle sort field |
+| `e` | Open export menu |
+| `j` (in export menu) | Export selected item |
+| `v` (in export menu) | Export visible list |
+| `r` | Reload report file |
 | `q` | Quit |
 
 ---
 
-## Make shortcuts
+## Make targets
 
 ```bash
-make all            # build vectoreologist + vectoreologist-lens
-make build          # CLI only
-make lens           # TUI only
-make install-lens   # copy vectoreologist-lens to /usr/local/bin
-make excavate       # kae_chunks, sample 5000
-make run-lens       # open latest findings with the lens
-make test           # go test ./...
-make fmt            # go fmt ./...
+make all          # build CLI + lens
+make build        # build CLI
+make lens         # build lens
+make run          # go run CLI
+make excavate     # sample run on kae_chunks
+make meta         # sample run on kae_meta_graph
+make history      # sample run on marks_gpt_history
+make forum        # sample run on qmu_forum
+make watch        # watch kae_chunks every 5m
+make watch-meta   # watch kae_meta_graph every 10m
+make run-lens     # open findings/vectoreology_*.json in lens
+make test         # go test ./...
+make fmt          # go fmt ./...
+make lint         # golangci-lint run
+make clean        # remove built binaries and findings/
 ```
 
 ---
 
 ## CI / Releases
 
-- **CI**: runs `go vet` + `go test ./...` on every push and PR (includes real UMAP+HDBSCAN tests)
-- **Releases**: push a `v*` tag to build cross-platform binaries and create a GitHub release with changelog notes
+- CI runs `go vet` and `go test -count=1 -timeout=10m ./...`
+- Release workflow builds cross-platform binaries on `v*` tags and publishes GitHub releases
 
-```bash
-git tag v0.2.0
-git push origin v0.2.0
-```
+See:
+- `.github/workflows/ci.yml`
+- `.github/workflows/release.yml`
