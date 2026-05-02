@@ -490,8 +490,8 @@ func TestAnalyzeClusters_DownsamplesLargeInput(t *testing.T) {
 	defer os.Setenv("PATH", origPath)
 
 	top := New()
-	vecs := make([][]float32, maxTopologyVectors+123)
-	meta := make([]models.VectorMetadata, maxTopologyVectors+123)
+	vecs := make([][]float32, MaxTopologyVectors+123)
+	meta := make([]models.VectorMetadata, MaxTopologyVectors+123)
 	for i := range vecs {
 		vecs[i] = []float32{float32(i), 0}
 		meta[i] = models.VectorMetadata{ID: uint64(i + 1)}
@@ -501,8 +501,8 @@ func TestAnalyzeClusters_DownsamplesLargeInput(t *testing.T) {
 	if len(clusters) != 1 {
 		t.Fatalf("want 1 cluster from fake python, got %d", len(clusters))
 	}
-	if clusters[0].Size != maxTopologyVectors {
-		t.Fatalf("cluster size: want %d sampled vectors, got %d", maxTopologyVectors, clusters[0].Size)
+	if clusters[0].Size != MaxTopologyVectors {
+		t.Fatalf("cluster size: want %d sampled vectors, got %d", MaxTopologyVectors, clusters[0].Size)
 	}
 }
 

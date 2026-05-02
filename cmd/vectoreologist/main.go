@@ -107,7 +107,16 @@ func runOnce(cfg config) (string, error) {
 		}
 	} else {
 		fmt.Printf("   ✓ Collection size: %d vectors\n", collSize)
-		if cfg.sampleSize == 0 || uint64(cfg.sampleSize) > collSize {
+		// maxAutoSample is the extraction ceiling applied when the user leaves
+		// --sample at 0. Topology analysis consumes at most MaxTopologyVectors;
+		// 2x gives FindBridges a full lookup pool without loading the whole
+		// collection into RAM.
+		const maxAutoSample = topology.MaxTopologyVectors * 2
+		switch {
+		case cfg.sampleSize == 0 && uint64(collSize) > maxAutoSample:
+			cfg.sampleSize = maxAutoSample
+			fmt.Printf("   ℹ Large collection: auto-capping to %d vectors (use --sample to override)\n", maxAutoSample)
+		case cfg.sampleSize == 0 || uint64(cfg.sampleSize) > collSize:
 			cfg.sampleSize = int(collSize)
 		}
 	}

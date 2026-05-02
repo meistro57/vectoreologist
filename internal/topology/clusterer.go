@@ -18,7 +18,9 @@ import (
 //go:embed cluster.py
 var clusterScript []byte
 
-const maxTopologyVectors = 8000
+// MaxTopologyVectors is the upper bound passed to cluster.py. Larger inputs
+// are randomly sampled before the Python subprocess is invoked.
+const MaxTopologyVectors = 8000
 
 type Topology struct {
 	neighbors      int
@@ -73,16 +75,16 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 
 	clusteringVectors := vectors
 	clusteringMetadata := metadata
-	if len(vectors) > maxTopologyVectors {
+	if len(vectors) > MaxTopologyVectors {
 		perm := rand.New(rand.NewSource(42)).Perm(len(vectors))
-		sel := perm[:maxTopologyVectors]
+		sel := perm[:MaxTopologyVectors]
 		clusteringVectors = make([][]float32, len(sel))
 		clusteringMetadata = make([]models.VectorMetadata, len(sel))
 		for i, idx := range sel {
 			clusteringVectors[i] = vectors[idx]
 			clusteringMetadata[i] = metadata[idx]
 		}
-		fmt.Fprintf(os.Stderr, "clustering: input too large (%d vectors), sampling %d vectors for topology analysis\n", len(vectors), maxTopologyVectors)
+		fmt.Fprintf(os.Stderr, "clustering: input too large (%d vectors), sampling %d vectors for topology analysis\n", len(vectors), MaxTopologyVectors)
 	}
 
 	// Write the embedded Python script to a temp file.
