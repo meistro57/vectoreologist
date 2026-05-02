@@ -178,24 +178,31 @@ func TestGenerateReport_MoatAnalysisSection(t *testing.T) {
 }
 
 func TestGenerateReport_FiltersFindingsByType(t *testing.T) {
-	// An "anomaly" type finding should NOT appear in any section.
 	dir := t.TempDir()
 	s := newTestSynthesizer(dir)
 
 	findings := []models.Finding{
 		{Type: "cluster_analysis", Subject: "Cluster A", ReasoningChain: "cluster text"},
-		{Type: "coherence_anomaly", Subject: "Anomaly X", ReasoningChain: "anomaly text"},
+		{Type: "coherence_anomaly", Subject: "Anomaly X", ReasoningChain: "anomaly text", IsAnomaly: true, Clusters: []int{1}},
 	}
 
 	path := s.GenerateReport(findings, nil, nil, nil, "test")
 	content, _ := os.ReadFile(path)
 	body := string(content)
 
-	if strings.Contains(body, "anomaly text") {
-		t.Error("anomaly finding should not appear in the report sections")
-	}
 	if !strings.Contains(body, "cluster text") {
-		t.Error("cluster finding should appear in the report")
+		t.Error("cluster finding should appear in the Cluster Analysis section")
+	}
+	if !strings.Contains(body, "anomaly text") {
+		t.Error("anomaly finding should appear in the Anomaly Findings section")
+	}
+	if !strings.Contains(body, "## Anomaly Findings") {
+		t.Error("report missing '## Anomaly Findings' section")
+	}
+	// Anomaly text must not bleed into the wrong sections.
+	clusterSection := strings.Split(body, "## Semantic Bridges")[0]
+	if strings.Contains(clusterSection, "anomaly text") {
+		t.Error("anomaly finding must not appear in the Cluster Analysis section")
 	}
 }
 
@@ -212,6 +219,7 @@ func TestGenerateReport_EmptyFindingsStillProducesStructure(t *testing.T) {
 		"## Cluster Analysis",
 		"## Semantic Bridges",
 		"## Knowledge Moats",
+		"## Anomaly Findings",
 	} {
 		if !strings.Contains(body, section) {
 			t.Errorf("missing section %q in empty report", section)

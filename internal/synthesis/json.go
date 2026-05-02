@@ -135,6 +135,9 @@ func (s *Synthesizer) GenerateJSON(
 			continue
 		}
 		cid := parseClusterID(f.Subject)
+		if cid == 0 && len(f.Clusters) > 0 {
+			cid = f.Clusters[0]
+		}
 		anomalies = append(anomalies, JSONAnomaly{
 			Type:           f.Type,
 			Subject:        f.Subject,

@@ -96,6 +96,15 @@ func (s *Synthesizer) GenerateReport(
 		}
 	}
 
+	sb.WriteString("## Anomaly Findings\n\n")
+	for _, finding := range findings {
+		switch finding.Type {
+		case "coherence_anomaly", "density_anomaly", "orphan_cluster", "source_contradiction":
+			sb.WriteString(fmt.Sprintf("### %s (%s)\n\n", finding.Subject, finding.Type))
+			sb.WriteString(fmt.Sprintf("%s\n\n", finding.ReasoningChain))
+		}
+	}
+
 	os.WriteFile(reportPath, []byte(sb.String()), 0644)
 
 	// Also generate JSON for the TUI lens.

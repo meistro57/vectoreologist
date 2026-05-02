@@ -275,9 +275,6 @@ func extractPoint(point *qdrant.RetrievedPoint, vectorName string, vectorCombine
 	return vec, meta, true
 }
 
-// buildFragment assembles a text fragment from payload fields, preferring
-// rich structured data (claims, concepts, echoes) over bare summary/text.
-// This gives HDBSCAN and the reasoner diverse signal instead of identical summaries.
 func vectorData(v *qdrant.VectorOutput) []float32 {
 	if v == nil {
 		return nil
@@ -315,6 +312,9 @@ func averageNamedVectors(named map[string]*qdrant.VectorOutput) []float32 {
 	return sum
 }
 
+// buildFragment assembles a text fragment from payload fields, preferring
+// rich structured data (claims, concepts, echoes) over bare summary/text.
+// This gives HDBSCAN and the reasoner diverse signal instead of identical summaries.
 func buildFragment(payload map[string]*qdrant.Value) string {
 	var parts []string
 
