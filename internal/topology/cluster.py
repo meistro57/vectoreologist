@@ -66,6 +66,8 @@ def main():
     # PCA pre-reduction: shrink high-dimensional vectors before UMAP to avoid
     # OOM in the nearest-neighbour graph. 50 components retain most structure
     # while cutting the per-point footprint by >30× for typical LLM embeddings.
+    orig_vectors = vectors  # kept in original space for centroid computation
+
     pca_target = 50
     if n_dims > pca_target and n_samples > pca_target:
         from sklearn.decomposition import PCA
@@ -109,12 +111,15 @@ def main():
         indices = np.where(mask)[0]
         vecs    = vectors[mask]
 
-        centroid    = vecs.mean(axis=0)
+        # Centroid in the original embedding space so it is comparable across
+        # chunks when AnalyzeClusters merges results from multiple runs.
+        orig_vecs   = orig_vectors[mask]
+        centroid    = orig_vecs.mean(axis=0)
         centroid_np = centroid
 
         # Coherence: mean cosine similarity of each vector to the centroid
-        dots  = vecs @ centroid_np
-        norms = np.linalg.norm(vecs, axis=1) * np.linalg.norm(centroid_np)
+        dots  = orig_vecs @ centroid_np
+        norms = np.linalg.norm(orig_vecs, axis=1) * np.linalg.norm(centroid_np)
         norms = np.where(norms == 0, 1e-9, norms)
         coherence = float(np.mean(dots / norms))
 

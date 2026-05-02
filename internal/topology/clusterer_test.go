@@ -473,13 +473,14 @@ func TestAnalyzeClusters_WithFakePython(t *testing.T) {
 	}
 }
 
-func TestAnalyzeClusters_DownsamplesLargeInput(t *testing.T) {
+func TestAnalyzeClusters_ChunksLargeInput(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake python script injection not supported on Windows")
 	}
 
 	fakeDir := t.TempDir()
 	fakePy := filepath.Join(fakeDir, "python3")
+	// Returns one cluster whose size equals the number of metadata entries in the input.
 	script := "#!/bin/sh\ncount=$(grep -o '\"id\"' \"$2\" | wc -l | tr -d ' ')\nprintf '{\"clusters\":[{\"id\":1,\"label\":\"sampled\",\"vector_ids\":[1],\"centroid\":[0,0],\"density\":1,\"size\":%s,\"coherence\":1}],\"noise_count\":0,\"total_vectors\":%s}\\n' \"$count\" \"$count\"\n"
 	if err := os.WriteFile(fakePy, []byte(script), 0755); err != nil {
 		t.Fatalf("could not write fake python3: %v", err)
@@ -490,19 +491,30 @@ func TestAnalyzeClusters_DownsamplesLargeInput(t *testing.T) {
 	defer os.Setenv("PATH", origPath)
 
 	top := New()
-	vecs := make([][]float32, MaxTopologyVectors+123)
-	meta := make([]models.VectorMetadata, MaxTopologyVectors+123)
+	total := MaxTopologyVectors + 123
+	vecs := make([][]float32, total)
+	meta := make([]models.VectorMetadata, total)
 	for i := range vecs {
 		vecs[i] = []float32{float32(i), 0}
 		meta[i] = models.VectorMetadata{ID: uint64(i + 1)}
 	}
 
 	clusters := top.AnalyzeClusters(vecs, meta)
-	if len(clusters) != 1 {
-		t.Fatalf("want 1 cluster from fake python, got %d", len(clusters))
+	// Two chunks → two clusters with globally-offset IDs.
+	if len(clusters) != 2 {
+		t.Fatalf("want 2 clusters (one per chunk), got %d", len(clusters))
+	}
+	if clusters[0].ID != 1 {
+		t.Errorf("chunk 1 cluster ID: want 1, got %d", clusters[0].ID)
 	}
 	if clusters[0].Size != MaxTopologyVectors {
-		t.Fatalf("cluster size: want %d sampled vectors, got %d", MaxTopologyVectors, clusters[0].Size)
+		t.Errorf("chunk 1 size: want %d, got %d", MaxTopologyVectors, clusters[0].Size)
+	}
+	if clusters[1].ID != 2 {
+		t.Errorf("chunk 2 cluster ID: want 2, got %d", clusters[1].ID)
+	}
+	if clusters[1].Size != 123 {
+		t.Errorf("chunk 2 size: want 123, got %d", clusters[1].Size)
 	}
 }
 

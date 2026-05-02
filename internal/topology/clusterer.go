@@ -68,26 +68,14 @@ type clusterOutput struct {
 }
 
 // AnalyzeClusters runs UMAP + HDBSCAN via an embedded Python script.
+// Vectors are processed in chunks of MaxTopologyVectors so that all points
+// are included regardless of collection size.
 func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.VectorMetadata) []models.Cluster {
 	if len(vectors) == 0 {
 		return nil
 	}
 
-	clusteringVectors := vectors
-	clusteringMetadata := metadata
-	if len(vectors) > MaxTopologyVectors {
-		perm := rand.New(rand.NewSource(42)).Perm(len(vectors))
-		sel := perm[:MaxTopologyVectors]
-		clusteringVectors = make([][]float32, len(sel))
-		clusteringMetadata = make([]models.VectorMetadata, len(sel))
-		for i, idx := range sel {
-			clusteringVectors[i] = vectors[idx]
-			clusteringMetadata[i] = metadata[idx]
-		}
-		fmt.Fprintf(os.Stderr, "clustering: input too large (%d vectors), sampling %d vectors for topology analysis\n", len(vectors), MaxTopologyVectors)
-	}
-
-	// Write the embedded Python script to a temp file.
+	// Write the embedded Python script once; all chunks reuse it.
 	scriptF, err := os.CreateTemp("", "vectoreologist-cluster-*.py")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clustering: create script temp: %v\n", err)
@@ -97,9 +85,44 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 	scriptF.Write(clusterScript)
 	scriptF.Close()
 
-	// Build and write the JSON input.
-	metaMaps := make([]map[string]string, len(clusteringMetadata))
-	for i, m := range clusteringMetadata {
+	totalChunks := (len(vectors) + MaxTopologyVectors - 1) / MaxTopologyVectors
+	var allClusters []models.Cluster
+	idOffset := 0
+	totalNoise := 0
+
+	for chunk := 0; chunk < totalChunks; chunk++ {
+		start := chunk * MaxTopologyVectors
+		end := start + MaxTopologyVectors
+		if end > len(vectors) {
+			end = len(vectors)
+		}
+		if totalChunks > 1 {
+			fmt.Printf("   → Topology chunk %d/%d (%d vectors)\n", chunk+1, totalChunks, end-start)
+		}
+
+		clusters, noise, ok := t.runClusterChunk(scriptF.Name(), vectors[start:end], metadata[start:end])
+		if !ok {
+			return nil
+		}
+		for i := range clusters {
+			clusters[i].ID += idOffset
+		}
+		idOffset += len(clusters)
+		totalNoise += noise
+		allClusters = append(allClusters, clusters...)
+	}
+
+	if totalNoise > 0 {
+		fmt.Printf("   ℹ %d/%d vectors classified as noise\n", totalNoise, len(vectors))
+	}
+
+	return allClusters
+}
+
+// runClusterChunk invokes the Python script for a single chunk of vectors.
+func (t *Topology) runClusterChunk(scriptPath string, vectors [][]float32, metadata []models.VectorMetadata) (clusters []models.Cluster, noiseCount int, ok bool) {
+	metaMaps := make([]map[string]string, len(metadata))
+	for i, m := range metadata {
 		metaMaps[i] = map[string]string{
 			"id":     fmt.Sprintf("%d", m.ID),
 			"source": m.Source,
@@ -108,7 +131,7 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 		}
 	}
 	input := clusterInput{
-		Vectors:  clusteringVectors,
+		Vectors:  vectors,
 		Metadata: metaMaps,
 		Params: map[string]any{
 			"n_neighbors":      t.neighbors,
@@ -121,42 +144,37 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 	inputF, err := os.CreateTemp("", "vectoreologist-input-*.json")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clustering: create input temp: %v\n", err)
-		return nil
+		return nil, 0, false
 	}
 	defer os.Remove(inputF.Name())
 	if err := json.NewEncoder(inputF).Encode(input); err != nil {
 		fmt.Fprintf(os.Stderr, "clustering: encode input: %v\n", err)
-		return nil
+		return nil, 0, false
 	}
 	inputF.Close()
 
-	// Run the script.
-	cmd := exec.Command("python3", scriptF.Name(), inputF.Name())
+	cmd := exec.Command("python3", scriptPath, inputF.Name())
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ProcessState != nil && strings.Contains(exitErr.ProcessState.String(), "killed") {
 			fmt.Fprintln(os.Stderr, "clustering: python process was killed (likely out-of-memory)")
-			fmt.Fprintln(os.Stderr, "  Reduce --sample or rely on automatic topology downsampling")
-			return nil
+			fmt.Fprintln(os.Stderr, "  Try --sample to reduce the total vectors loaded")
+			return nil, 0, false
 		}
 		fmt.Fprintf(os.Stderr, "clustering: python script failed: %v\n", err)
 		fmt.Fprintln(os.Stderr, "  Install deps: pip install umap-learn hdbscan numpy")
-		return nil
+		return nil, 0, false
 	}
 
 	var result clusterOutput
 	if err := json.Unmarshal(out, &result); err != nil {
 		fmt.Fprintf(os.Stderr, "clustering: parse output: %v\n", err)
-		return nil
+		return nil, 0, false
 	}
 
-	if result.NoiseCount > 0 {
-		fmt.Printf("   ℹ %d/%d vectors classified as noise\n", result.NoiseCount, result.TotalVectors)
-	}
-
-	clusters := make([]models.Cluster, len(result.Clusters))
+	clusters = make([]models.Cluster, len(result.Clusters))
 	for i, c := range result.Clusters {
 		clusters[i] = models.Cluster{
 			ID:        c.ID,
@@ -168,7 +186,7 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 			Coherence: c.Coherence,
 		}
 	}
-	return clusters
+	return clusters, result.NoiseCount, true
 }
 
 // FindBridges identifies semantic connections between clusters and populates
