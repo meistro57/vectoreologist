@@ -6,16 +6,12 @@
 
 The core insight: **Vector space has emergent structure that isn't visible in individual chunks.** Clusters, bridges, moats, and anomalies in vector topology reveal patterns that only emerge when you analyze embeddings in aggregate.
 
-## Why This Matters
-
-Your existing KAE runs have produced 7,380 concept nodes from 40,404 chunks. But those nodes were extracted by reasoning over *text content*. Vectoreologist asks: **What if we reason over the vector space directly?**
-
 This reveals:
 - **Consensus concepts** that cluster tightly despite diverse sources
 - **Knowledge bridges** that connect seemingly unrelated domains
 - **Information moats** where no semantic connection exists (revealing gaps)
 - **Contradictions** where similar vectors carry opposing metadata
-- **Orphaned concepts** isolated from the knowledge graph
+- **Orphaned concepts** isolated from the rest of the embedding space
 
 ## Architecture
 
@@ -32,12 +28,14 @@ Qdrant → Sample Strategy → Vectors + Metadata
 
 ### Phase 2: Topology Analysis
 ```
-Vectors → PCA Reduction → DBSCAN Clustering → Graph Construction
+Vectors → PCA Reduction (50 dims) → L2 Normalise → DBSCAN Clustering → Graph Construction
 ```
 
+All computation is pure Go — no Python subprocess, no external runtime.
+
 **Key metrics:**
-- **Cluster coherence**: How tightly vectors group
-- **Cluster density**: Vector concentration
+- **Cluster coherence**: How tightly vectors group (mean cosine similarity to centroid)
+- **Cluster density**: Vector concentration in reduced space
 - **Bridge strength**: Inter-cluster cosine similarity
 - **Moat distance**: Semantic isolation measure
 
@@ -60,10 +58,10 @@ For each moat: "Why is there no connection?"
 
 ### Phase 5: Synthesis
 ```
-Findings → Markdown Report + Qdrant Storage
+Findings → Markdown Report + JSON Report + Qdrant Storage
 ```
 
-Reports stored in `findings/` with cross-references to KAE runs.
+Reports written to `findings/` with timestamped filenames.
 
 ## Data Structures
 
@@ -116,67 +114,51 @@ type Finding struct {
 }
 ```
 
-## Integration with KAE
-
-Vectoreologist complements KAE by:
-1. **Validating KAE concepts** — do they cluster in vector space?
-2. **Finding missed concepts** — clusters KAE didn't detect in text
-3. **Cross-run convergence** — compare vector topology across KAE runs
-4. **Meta-attractor validation** — do meta-graph attractors form tight clusters?
-
 ## Future Extensions
-
-### KAE Lens-Style TUI
-Bubbletea interface for:
-- Live cluster visualization
-- Interactive bridge exploration
-- Anomaly drilling
 
 ### Continuous Excavation
 Watch Qdrant for new vectors, trigger incremental analysis.
 
 ### Multi-Collection Comparison
-Compare vector topology across:
-- `kae_chunks` vs `marks_gpt_history`
-- `qmu_forum` vs `aisc_manual`
-
-Find convergent clusters across collections.
+Compare vector topology across collections to find convergent clusters.
 
 ### Temporal Topology
 Track how vector clusters evolve over time.
 
+### Semantic Label Propagation
+Use cluster labels to annotate raw vectors in the source collection.
+
 ## Performance Considerations
 
-- **Memory**: 5000 vectors × 1536 dims × 4 bytes = ~30MB; PCA covariance matrix is d×d (not n×d), bounded regardless of collection size
+- **Memory**: 5000 vectors × 1536 dims × 4 bytes ≈ 30 MB; PCA covariance matrix is d×d (not n×d), bounded regardless of collection size
 - **Clustering**: DBSCAN with precomputed neighbour lists, parallel across all CPU cores; PCA via covariance matrix O(n·d²) — parallel, bounded by d×d not n×d
-- **DeepSeek calls**: Rate-limited, async batch processing
+- **Cap**: `MaxTopologyTotal = 20,000` — input is random-sampled before PCA runs
+- **Redis workspace**: optional `--redis-url` keeps Go heap at O(batch_size) during extraction; only `MaxTopologyTotal` vectors are loaded into RAM for topology
 
 ## Dependencies
 
-- `github.com/qdrant/go-client` - Qdrant interaction
-- `github.com/spf13/cobra` - CLI framework
-- `gonum.org/v1/gonum` - PCA (EigenSym) and matrix operations
-- `github.com/redis/go-redis/v9` - optional Redis vector workspace
+- `github.com/qdrant/go-client` — Qdrant gRPC interaction
+- `gonum.org/v1/gonum` — PCA (EigenSym) and matrix operations
+- `github.com/redis/go-redis/v9` — optional Redis vector workspace
 - No Python required
 
 ## Example Workflow
 
 ```bash
-# Excavate KAE chunks, find concept clusters
-make excavate
+# Analyse any Qdrant collection
+./vectoreologist --collection my_collection --sample 5000
 
-# Analyze meta-graph for attractor validation
-make meta
+# Large collection — stream batches to Redis, keep Go heap low
+./scripts/start-redis.sh
+make run-redis COLLECTION=my_large_collection
 
-# Compare your GPT history topology
-make history
+# Compare two collections
+./vectoreologist --collection collection_a --output ./findings/a
+./vectoreologist --collection collection_b --output ./findings/b
+diff findings/a/vectoreology_*.md findings/b/vectoreology_*.md
 
-# Cross-reference findings
-./vectoreologist --collection kae_chunks --sample 10000 --output ./kae_findings
-./vectoreologist --collection marks_gpt_history --sample 2000 --output ./gpt_findings
-
-# Compare reports to find convergent concepts
-diff kae_findings/vectoreology_*.md gpt_findings/vectoreology_*.md
+# Watch mode — rerun every 10 minutes
+make run-watch COLLECTION=my_collection WATCH=10m
 ```
 
 ## Output Example
@@ -198,14 +180,9 @@ diff kae_findings/vectoreology_*.md gpt_findings/vectoreology_*.md
 
 **Reasoning Chain:**
 <think>
-This cluster shows high coherence (0.92) with vectors from Seth Speaks, 
-QHHT transcripts, and Hemi-Sync documentation. The tight clustering 
-suggests these sources converge on similar concepts of consciousness 
-as primary reality. The centroid is semantically close to "awareness 
-as fundamental" and "observer-created reality".
-
-Key pattern: All vectors reference non-local consciousness, suggesting 
-this is a stable attractor concept across your knowledge base.
+This cluster shows high coherence (0.92). The tight clustering suggests
+these sources converge on similar concepts. The centroid is semantically
+close to "awareness as fundamental" and "observer-created reality".
 </think>
 
 **Anomaly:** None
@@ -217,14 +194,10 @@ this is a stable attractor concept across your knowledge base.
 
 **Reasoning Chain:**
 <think>
-Cluster 7 (Consciousness) bridges to Cluster 12 (Quantum Physics) 
-through the observer effect and measurement problem. This is a 
-well-established connection in consciousness studies.
-
-Interesting: The bridge strength is higher than expected, suggesting 
-your knowledge base treats these as more unified than conventional 
-physics does. May reflect Seth/Bashar integration of physics + 
-consciousness frameworks.
+Cluster 7 bridges to Cluster 12 through shared vocabulary around
+measurement and observation. The bridge strength is higher than expected,
+suggesting the collection treats these as more unified than conventional
+analysis does.
 </think>
 
 ## Knowledge Moats
@@ -235,23 +208,17 @@ consciousness frameworks.
 
 **Reasoning Chain:**
 <think>
-Cluster 3 (Structural Steel Detailing) and Cluster 18 (Metaphysical 
-Frameworks) show near-complete isolation. No semantic bridges detected.
-
-This is expected given domain separation, but noteworthy: your mental 
-model keeps these entirely separate. No cross-pollination of concepts 
-like "structural integrity" → "reality frameworks" or vice versa.
-
-Could be an opportunity: applying engineering rigor to metaphysics, 
-or consciousness principles to structural design.
+Cluster 3 and Cluster 18 show near-complete isolation. No semantic
+bridges detected. This could be an opportunity: are these domains
+truly unrelated, or is there a missing bridge worth exploring?
 </think>
 ```
 
 ## Success Metrics
 
 Vectoreologist succeeds if it:
-1. **Finds concepts KAE missed** by analyzing vector topology
-2. **Validates KAE findings** with cluster coherence scores
+1. **Discovers latent structure** not visible in individual documents
+2. **Surfaces high-coherence concept clusters** with explainable labels
 3. **Reveals cross-domain bridges** invisible in text analysis
 4. **Identifies knowledge gaps** via moat detection
-5. **Generates actionable insights** about your knowledge structure
+5. **Generates actionable insights** about the embedding space structure

@@ -42,9 +42,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   HDBSCAN is preserved in a new `cluster.Source` field and carried through to JSON reports.
   Bridges receive the same treatment via a new `bridge.Label` field.
 - **Text snippets in cluster prompts** — for collections where source URLs are absent or
-  uninformative (e.g. `kae_lens_findings`), `ReasonAboutTopology` now fetches up to 5 text
-  payload fragments from each cluster's member vectors and includes them in the R1 prompt so
-  the model reasons about actual content rather than just topology metrics.
+  uninformative, `ReasonAboutTopology` now fetches up to 5 text payload fragments from each
+  cluster's member vectors and includes them in the R1 prompt so the model reasons about
+  actual content rather than just topology metrics.
 - **Named vector selection controls for extraction** — added `--vector-name` to target a
   specific Qdrant named vector and `--vector-combine` to average all named vectors element-wise
   for multi-vector collections. When neither flag is set, extraction keeps the existing fallback
@@ -82,7 +82,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   printing a one-line elapsed-time summary per cycle to stdout. Stops cleanly on SIGINT/SIGTERM.
   The timer restarts after each cycle completes, so overlapping runs are impossible even when a
   DeepSeek R1 call exceeds the interval. Cycle errors are logged as warnings; the loop continues.
-- `make watch` and `make watch-meta` convenience targets
+- `make run-watch` convenience target
 - **Diverse sampling** (`--sample-strategy diverse`) — implements greedy MaxMin (Farthest-First)
   selection that maximises the minimum pairwise distance across the chosen vectors. When selected,
   extracts a 1.5× larger pool from Qdrant then downsamples to `--sample`, ensuring the topology

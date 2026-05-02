@@ -1,4 +1,6 @@
-.PHONY: build lens all run clean test
+.PHONY: build lens all run clean test \
+        redis-start redis-stop \
+        run-collection run-redis run-watch
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
@@ -20,29 +22,41 @@ run-lens:
 run:
 	go run ./cmd/vectoreologist
 
-# Run with default settings
-excavate:
-	./vectoreologist --collection kae_chunks --sample 5000
+# ── Redis Docker helpers ──────────────────────────────────────────────────────
 
-# Run on meta-graph
-meta:
-	./vectoreologist --collection kae_meta_graph --sample 100
+redis-start:
+	./scripts/start-redis.sh
 
-# Run on your GPT history
-history:
-	./vectoreologist --collection marks_gpt_history --sample 2000
+redis-stop:
+	docker stop vectoreologist-redis 2>/dev/null || true
 
-# Run on QMU forum
-forum:
-	./vectoreologist --collection qmu_forum --sample 300
+# ── Standard runs ─────────────────────────────────────────────────────────────
+# Override COLLECTION to target a specific Qdrant collection.
+# Example: make run-collection COLLECTION=my_embeddings SAMPLE=5000
 
-# Watch kae_chunks every 5 minutes
-watch:
-	./vectoreologist --collection kae_chunks --sample 5000 --watch 5m
+COLLECTION ?= my_collection
+SAMPLE     ?= 5000
 
-# Watch meta-graph every 10 minutes
-watch-meta:
-	./vectoreologist --collection kae_meta_graph --sample 100 --watch 10m
+run-collection:
+	./vectoreologist --collection $(COLLECTION) --sample $(SAMPLE)
+
+# ── Redis-backed runs (streaming extraction, lower Go heap) ──────────────────
+# Start Redis first: make redis-start
+# Example: make run-redis COLLECTION=my_large_collection
+
+REDIS_URL ?= redis://localhost:6379
+
+run-redis:
+	./vectoreologist --collection $(COLLECTION) \
+	    --redis-url $(REDIS_URL)
+
+# ── Watch mode ────────────────────────────────────────────────────────────────
+# Example: make run-watch COLLECTION=my_collection WATCH=5m
+
+WATCH ?= 5m
+
+run-watch:
+	./vectoreologist --collection $(COLLECTION) --sample $(SAMPLE) --watch $(WATCH)
 
 # Install dependencies
 deps:

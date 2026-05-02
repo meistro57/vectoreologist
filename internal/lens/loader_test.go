@@ -17,7 +17,7 @@ func TestLoadReport(t *testing.T) {
 
 	input := synthesis.JSONReport{
 		Timestamp:  "2026-04-16T10-00-00",
-		Collection: "kae_chunks",
+		Collection: "my_collection",
 		Summary: synthesis.JSONSummary{
 			TotalClusters:  2,
 			TotalBridges:   1,

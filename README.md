@@ -114,28 +114,31 @@ If no DeepSeek key is provided, topology and anomaly phases still run and reason
 
 ```bash
 # Full collection (sample=0 means all vectors)
-./vectoreologist --collection kae_chunks
+./vectoreologist --collection my_collection
 
 # Fixed sample size with diverse sampling
-./vectoreologist --collection kae_chunks --sample 5000 --sample-strategy diverse
+./vectoreologist --collection my_collection --sample 5000 --sample-strategy diverse
 
 # Incremental mode: only process unstamped points
-./vectoreologist --collection kae_chunks --incremental
+./vectoreologist --collection my_collection --incremental
 
 # Generate semantic labels using DeepSeek
-./vectoreologist --collection kae_chunks --semantic-labels --deepseek-key "$DEEPSEEK_API_KEY"
+./vectoreologist --collection my_collection --semantic-labels --deepseek-key "$DEEPSEEK_API_KEY"
 
 # Watch mode: rerun every 5 minutes
-./vectoreologist --collection kae_chunks --watch 5m
+./vectoreologist --collection my_collection --watch 5m
 
 # Fast reasoning model
-./vectoreologist --collection kae_chunks --deepseek-model deepseek-chat
+./vectoreologist --collection my_collection --deepseek-model deepseek-chat
 
 # Use a specific named vector from multi-vector collections
-./vectoreologist --collection kae_chunks --vector-name summary_vec
+./vectoreologist --collection my_collection --vector-name summary_vec
 
 # Combine all named vectors into a single averaged vector
-./vectoreologist --collection kae_chunks --vector-combine
+./vectoreologist --collection my_collection --vector-combine
+
+# Large collection via Redis workspace (keeps Go heap low)
+./vectoreologist --collection my_large_collection --redis-url redis://localhost:6379
 
 # Print version
 ./vectoreologist --version
@@ -224,21 +227,20 @@ Open a generated JSON report:
 ## Make targets
 
 ```bash
-make all          # build CLI + lens
-make build        # build CLI
-make lens         # build lens
-make run          # go run CLI
-make excavate     # sample run on kae_chunks
-make meta         # sample run on kae_meta_graph
-make history      # sample run on marks_gpt_history
-make forum        # sample run on qmu_forum
-make watch        # watch kae_chunks every 5m
-make watch-meta   # watch kae_meta_graph every 10m
-make run-lens     # open findings/vectoreology_*.json in lens
-make test         # go test ./...
-make fmt          # go fmt ./...
-make lint         # golangci-lint run
-make clean        # remove built binaries and findings/
+make all                               # build CLI + lens
+make build                             # build CLI
+make lens                              # build lens
+make run                               # go run CLI
+make run-collection COLLECTION=my_col  # sample 5000 vectors from a collection
+make run-redis COLLECTION=my_col       # same via Redis workspace (low heap)
+make run-watch COLLECTION=my_col       # watch mode, reruns every 5m
+make redis-start                       # start Redis Docker container
+make redis-stop                        # stop Redis Docker container
+make run-lens                          # open findings/vectoreology_*.json in lens
+make test                              # go test ./...
+make fmt                               # go fmt ./...
+make lint                              # golangci-lint run
+make clean                             # remove built binaries and findings/
 ```
 
 ---

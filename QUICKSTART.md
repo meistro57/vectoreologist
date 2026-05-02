@@ -52,17 +52,16 @@ No DeepSeek key? The tool still runs — Phase 4 reasoning is skipped and you st
 
 ## 4. First Excavation
 
+Replace `my_collection` with the name of your Qdrant collection:
+
 ```bash
-./vectoreologist --collection kae_chunks --sample 5000
+./vectoreologist --collection my_collection --sample 5000
 ```
 
-Or via make shortcuts:
+Or via make:
 
 ```bash
-make excavate   # kae_chunks, 5000 vectors
-make meta       # kae_meta_graph, 100 vectors
-make history    # marks_gpt_history, 2000 vectors
-make forum      # qmu_forum, 300 vectors
+make run-collection COLLECTION=my_collection SAMPLE=5000
 ```
 
 ---
@@ -72,7 +71,7 @@ make forum      # qmu_forum, 300 vectors
 ### Console
 
 ```
-🏺 Vectoreologist - Excavating kae_chunks from http://localhost:6333
+🏺 Vectoreologist - Excavating my_collection from http://localhost:6333
 
 📡 Phase 1: Vector Excavation
    ✓ Extracted 5000 vectors with metadata
@@ -89,15 +88,13 @@ make forum      # qmu_forum, 300 vectors
    ✓ Found 0 source contradictions
 
 🧠 Phase 4: DeepSeek R1 Reasoning
-   reasoning 1/32: Cluster 1: surface / kae_chunks ...
+   reasoning 1/32: Cluster 1: surface / my_collection ...
 
-   --- thinking: Cluster 1: surface / kae_chunks ---
+   --- thinking: Cluster 1: surface / my_collection ---
    Let me work through what this cluster represents...
    The density of 0.73 and coherence of 0.91 suggest tight grouping...
    ---
 
-   reasoning 2/32: Cluster 2: deep / kae_meta_graph ...
-   ...
    ✓ reasoning complete (32/32)
 
 📝 Phase 5: Synthesis & Storage
@@ -133,35 +130,44 @@ Open `findings/vectoreology_*.md` to see:
 
 ### Fast pass (no reasoning)
 ```bash
-./vectoreologist --collection kae_chunks --deepseek-model deepseek-chat
+./vectoreologist --collection my_collection --deepseek-model deepseek-chat
 ```
 
 ### Full R1 deep dive on a small collection
 ```bash
-./vectoreologist --collection kae_meta_graph --sample 100
+./vectoreologist --collection my_collection --sample 100
 ```
 
 ### Compare two collections
 ```bash
-./vectoreologist --collection kae_chunks --output ./findings/kae
-./vectoreologist --collection marks_gpt_history --output ./findings/gpt
-diff findings/kae/vectoreology_*.md findings/gpt/vectoreology_*.md
+./vectoreologist --collection collection_a --output ./findings/a
+./vectoreologist --collection collection_b --output ./findings/b
+diff findings/a/vectoreology_*.md findings/b/vectoreology_*.md
 ```
 
 ### Use a specific named vector
 ```bash
-./vectoreologist --collection kae_chunks --vector-name summary_vec
+./vectoreologist --collection my_collection --vector-name summary_vec
 ```
 
 ### Combine all named vectors
 ```bash
-./vectoreologist --collection kae_chunks --vector-combine
+./vectoreologist --collection my_collection --vector-combine
 ```
 
 ### Large collection with Redis workspace
 ```bash
 ./scripts/start-redis.sh
-./vectoreologist --collection meta_reflections --redis-url redis://localhost:6379
+./vectoreologist --collection my_large_collection --redis-url redis://localhost:6379
+# or via make:
+make run-redis COLLECTION=my_large_collection
+```
+
+### Watch mode
+```bash
+./vectoreologist --collection my_collection --watch 5m
+# or via make:
+make run-watch COLLECTION=my_collection WATCH=10m
 ```
 
 ---
@@ -178,7 +184,7 @@ docker restart $(docker ps -q --filter ancestor=qdrant/qdrant)
 ```bash
 # Verify collection name and contents
 curl http://localhost:6333/collections
-curl http://localhost:6333/collections/kae_chunks
+curl http://localhost:6333/collections/my_collection
 ```
 
 ### "No DeepSeek API key — skipping reasoning phase"
@@ -187,7 +193,7 @@ curl http://localhost:6333/collections/kae_chunks
 cat .env | grep DEEPSEEK_API_KEY
 
 # Or pass it directly
-./vectoreologist --collection kae_chunks --deepseek-key sk-...
+./vectoreologist --collection my_collection --deepseek-key sk-...
 ```
 
 ### "Redis connection refused"
@@ -198,7 +204,7 @@ cat .env | grep DEEPSEEK_API_KEY
 ### Phase 4 hangs / times out
 Each R1 call has a 5-minute timeout. For large cluster counts use fast mode:
 ```bash
-./vectoreologist --collection kae_chunks --deepseek-model deepseek-chat
+./vectoreologist --collection my_collection --deepseek-model deepseek-chat
 ```
 
 ### Build errors
@@ -211,7 +217,7 @@ make build
 ### "Error: --batch-size must be > 0" (or similar flag validation errors)
 Use valid numeric bounds:
 ```bash
-./vectoreologist --collection kae_chunks --sample 5000 --batch-size 1000 --min-cluster-size 5
+./vectoreologist --collection my_collection --sample 5000 --batch-size 1000 --min-cluster-size 5
 ```
 
 ---
@@ -220,6 +226,6 @@ Use valid numeric bounds:
 
 1. Read `DESIGN.md` for architecture details
 2. Browse `findings/` for reports
-3. Query the `vectoreology_findings` Qdrant collection via KAE Lens
-4. Compare reports across collections to find convergence with KAE runs
-5. Tune `--sample` up for deeper coverage, down for faster iteration
+3. Query the `vectoreology_findings` Qdrant collection directly
+4. Tune `--sample` up for deeper coverage, down for faster iteration
+5. Try `--sample-strategy diverse` to maximise vector-space coverage
