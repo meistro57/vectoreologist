@@ -2,10 +2,11 @@ package excavator
 
 import (
 	"context"
-	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/meistro57/vectoreologist/internal/models"
 	qdrant "github.com/qdrant/go-client/qdrant"
@@ -13,12 +14,14 @@ import (
 )
 
 type Excavator struct {
-	client *qdrant.Client
+	client        *qdrant.Client
+	vectorName    string
+	vectorCombine bool
 }
 
 const maxMsgSize = 256 * 1024 * 1024 // 256 MB
 
-func New(rawURL string) *Excavator {
+func New(rawURL, vectorName string, vectorCombine bool) *Excavator {
 	client, err := qdrant.NewClient(&qdrant.Config{
 		Host: hostname(rawURL),
 		GrpcOptions: []grpc.DialOption{
@@ -29,7 +32,7 @@ func New(rawURL string) *Excavator {
 		panic(fmt.Sprintf("Failed to connect to Qdrant: %v", err))
 	}
 
-	return &Excavator{client: client}
+	return &Excavator{client: client, vectorName: vectorName, vectorCombine: vectorCombine}
 }
 
 // CollectionSize returns the number of points in the named collection.
@@ -130,7 +133,7 @@ func (e *Excavator) ExtractIncremental(collectionName string, limit, batchSize i
 		}
 
 		for _, point := range points {
-			vec, meta, ok := extractPoint(point)
+			vec, meta, ok := extractPoint(point, e.vectorName, e.vectorCombine)
 			if !ok {
 				continue
 			}
@@ -193,7 +196,7 @@ func (e *Excavator) Extract(collectionName string, limit, batchSize int, strict 
 		}
 
 		for _, point := range points {
-			vec, meta, ok := extractPoint(point)
+			vec, meta, ok := extractPoint(point, e.vectorName, e.vectorCombine)
 			if !ok {
 				continue
 			}
@@ -217,22 +220,27 @@ func (e *Excavator) Extract(collectionName string, limit, batchSize int, strict 
 
 // extractPoint converts a RetrievedPoint into a vector and metadata.
 // Returns (vec, meta, true) on success; (nil, zero, false) if the point has no vector.
-func extractPoint(point *qdrant.RetrievedPoint) ([]float32, models.VectorMetadata, bool) {
+func extractPoint(point *qdrant.RetrievedPoint, vectorName string, vectorCombine bool) ([]float32, models.VectorMetadata, bool) {
 	var vec []float32
+	if point == nil || point.Vectors == nil {
+		return nil, models.VectorMetadata{}, false
+	}
 	if v := point.Vectors.GetVector(); v != nil {
-		if dense := v.GetDense(); dense != nil {
-			vec = dense.Data
-		} else {
-			vec = v.Data // fallback for pre-1.12 servers
-		}
+		vec = vectorData(v)
 	} else if named := point.Vectors.GetVectors(); named != nil {
-		for _, nv := range named.GetVectors() {
-			if dense := nv.GetDense(); dense != nil {
-				vec = dense.Data
-			} else {
-				vec = nv.Data
+		namedVectors := named.GetVectors()
+		if vectorCombine {
+			vec = averageNamedVectors(namedVectors)
+		} else if vectorName != "" {
+			vec = vectorData(namedVectors[vectorName])
+		}
+		if len(vec) == 0 {
+			for _, nv := range namedVectors {
+				vec = vectorData(nv)
+				if len(vec) > 0 {
+					break
+				}
 			}
-			break
 		}
 	}
 	if len(vec) == 0 {
@@ -270,6 +278,43 @@ func extractPoint(point *qdrant.RetrievedPoint) ([]float32, models.VectorMetadat
 // buildFragment assembles a text fragment from payload fields, preferring
 // rich structured data (claims, concepts, echoes) over bare summary/text.
 // This gives HDBSCAN and the reasoner diverse signal instead of identical summaries.
+func vectorData(v *qdrant.VectorOutput) []float32 {
+	if v == nil {
+		return nil
+	}
+	if dense := v.GetDense(); dense != nil {
+		return dense.Data
+	}
+	return v.Data
+}
+
+func averageNamedVectors(named map[string]*qdrant.VectorOutput) []float32 {
+	var sum []float32
+	count := 0
+	for _, v := range named {
+		data := vectorData(v)
+		if len(data) == 0 {
+			continue
+		}
+		if len(sum) == 0 {
+			sum = make([]float32, len(data))
+		} else if len(data) != len(sum) {
+			continue
+		}
+		for i := range data {
+			sum[i] += data[i]
+		}
+		count++
+	}
+	if count == 0 {
+		return nil
+	}
+	for i := range sum {
+		sum[i] /= float32(count)
+	}
+	return sum
+}
+
 func buildFragment(payload map[string]*qdrant.Value) string {
 	var parts []string
 
@@ -391,37 +436,29 @@ func truncate(s string, maxLen int) string {
 }
 
 // pointIDToUint64 converts a Qdrant PointId to uint64.
-// Numeric IDs pass through directly. UUID IDs are hashed to a
+// Numeric IDs pass through directly. UUID IDs are converted to a
 // deterministic uint64 using the first 8 bytes of the UUID.
 func pointIDToUint64(id *qdrant.PointId) uint64 {
 	if id == nil {
 		return 0
 	}
-	// Numeric ID.
 	if n := id.GetNum(); n != 0 {
 		return n
 	}
-	// UUID string ID — convert to deterministic uint64.
-	uuid := id.GetUuid()
-	if uuid == "" {
+	uuid := strings.ReplaceAll(id.GetUuid(), "-", "")
+	if len(uuid) < 16 {
 		return 0
 	}
-	// Strip hyphens and take first 16 hex chars (8 bytes).
-	hex := ""
-	for _, c := range uuid {
-		if c != '-' {
-			hex += string(c)
-		}
-		if len(hex) >= 16 {
-			break
-		}
+	bytes, err := hex.DecodeString(uuid[:16])
+	if err != nil || len(bytes) != 8 {
+		return 0
 	}
-	// Parse as big-endian uint64.
-	var b [8]byte
-	for i := 0; i < 8 && i*2+1 < len(hex); i++ {
-		fmt.Sscanf(hex[i*2:i*2+2], "%02x", &b[i])
+
+	var out uint64
+	for _, b := range bytes {
+		out = (out << 8) | uint64(b)
 	}
-	return binary.BigEndian.Uint64(b[:])
+	return out
 }
 
 // hostname strips the scheme and port from a URL, returning just the host.

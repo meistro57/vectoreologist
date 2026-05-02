@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -283,5 +284,37 @@ func TestBatchSizeClamping(t *testing.T) {
 		if b != tc.wantBatch {
 			t.Errorf("clamp(sample=%d, batch=%d) = %d; want %d", tc.sample, tc.batch, b, tc.wantBatch)
 		}
+	}
+}
+
+func TestValidateConfig(t *testing.T) {
+	base := config{sampleSize: 0, batchSize: 100, minClusterSize: 5, minSamples: 3}
+	cases := []struct {
+		name    string
+		cfg     config
+		wantErr string
+	}{
+		{name: "valid", cfg: base, wantErr: ""},
+		{name: "negative sample", cfg: config{sampleSize: -1, batchSize: 100, minClusterSize: 5, minSamples: 3}, wantErr: "--sample"},
+		{name: "zero batch", cfg: config{sampleSize: 0, batchSize: 0, minClusterSize: 5, minSamples: 3}, wantErr: "--batch-size"},
+		{name: "nonpositive min cluster size", cfg: config{sampleSize: 0, batchSize: 100, minClusterSize: 0, minSamples: 3}, wantErr: "--min-cluster-size"},
+		{name: "nonpositive min samples", cfg: config{sampleSize: 0, batchSize: 100, minClusterSize: 5, minSamples: 0}, wantErr: "--min-samples"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateConfig(tc.cfg)
+			if tc.wantErr == "" && err != nil {
+				t.Fatalf("validateConfig() unexpected error: %v", err)
+			}
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("validateConfig() expected error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("validateConfig() error = %q, want substring %q", err.Error(), tc.wantErr)
+				}
+			}
+		})
 	}
 }

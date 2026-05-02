@@ -29,6 +29,8 @@ type config struct {
 	sampleSize     int
 	batchSize      int
 	strict         bool
+	vectorName     string
+	vectorCombine  bool
 	outputPath     string
 	qdrantURL      string
 	deepseekKey    string
@@ -37,6 +39,8 @@ type config struct {
 	sampleStrategy string
 	semanticLabels bool
 	incremental    bool
+	minClusterSize int
+	minSamples     int
 }
 
 // loadDotEnv reads a .env file and sets any variables not already in the environment.
@@ -65,13 +69,32 @@ func loadDotEnv(path string) {
 	}
 }
 
+func validateConfig(cfg config) error {
+	if cfg.sampleSize < 0 {
+		return fmt.Errorf("--sample must be >= 0")
+	}
+	if cfg.batchSize <= 0 {
+		return fmt.Errorf("--batch-size must be > 0")
+	}
+	if cfg.minClusterSize <= 0 {
+		return fmt.Errorf("--min-cluster-size must be > 0")
+	}
+	if cfg.minSamples <= 0 {
+		return fmt.Errorf("--min-samples must be > 0")
+	}
+	return nil
+}
+
 // runOnce executes the full excavation pipeline and returns the report path.
 func runOnce(cfg config) (string, error) {
+	if err := validateConfig(cfg); err != nil {
+		return "", err
+	}
 	fmt.Printf("🏺 Vectoreologist - Excavating %s from %s\n\n", cfg.collection, cfg.qdrantURL)
 
 	// Phase 1: Vector Excavation
 	fmt.Println("📡 Phase 1: Vector Excavation")
-	exc := excavator.New(cfg.qdrantURL)
+	exc := excavator.New(cfg.qdrantURL, cfg.vectorName, cfg.vectorCombine)
 	sampleStrat := excavator.SamplingStrategy(cfg.sampleStrategy)
 
 	// Resolve sample size: 0 means "use entire collection".
@@ -131,6 +154,7 @@ func runOnce(cfg config) (string, error) {
 	// Phase 2: Topology Analysis
 	fmt.Println("🗺️  Phase 2: Topology Analysis")
 	topo := topology.New()
+	topo.SetHDBSCANParams(cfg.minClusterSize, cfg.minSamples)
 	clusters := topo.AnalyzeClusters(vectors, metadata)
 
 	// Optional: replace layer/source labels with DeepSeek-generated semantic names.
@@ -177,7 +201,7 @@ func runOnce(cfg config) (string, error) {
 	synth := synthesis.New(cfg.qdrantURL, cfg.outputPath)
 	reportPath := synth.GenerateReport(allFindings, clusters, bridges, moats, cfg.collection)
 	fmt.Printf("   ✓ Report written to %s\n", reportPath)
-	if err := synth.StoreFindings(allFindings); err != nil {
+	if err := synth.StoreFindings(allFindings, clusters); err != nil {
 		fmt.Fprintf(os.Stderr, "   ⚠ Failed to store findings: %v\n", err)
 	} else {
 		fmt.Println("   ✓ Findings stored in vectoreology_findings collection")
@@ -214,20 +238,24 @@ func runOnce(cfg config) (string, error) {
 
 func main() {
 	loadDotEnv(".env")
-	showVersion   := flag.Bool("version",        false,                        "Print version and exit")
-	collection    := flag.String("collection",   "",                           "Qdrant collection name (required)")
-	sampleSize    := flag.Int("sample",          0,                            "Number of vectors to sample (0 = entire collection)")
-	batchSize     := flag.Int("batch-size",      5000,                         "Vectors per batch during extraction")
-	strict        := flag.Bool("strict",         false,                        "Fail immediately if any batch errors (default: stop early and continue)")
-	outputPath    := flag.String("output",       "./findings",                 "Output directory for reports")
-	qdrantURL     := flag.String("qdrant-url",   "",                           "Qdrant URL (default: QDRANT_URL env or http://localhost:6333)")
-	deepseekKey   := flag.String("deepseek-key", "",                           "DeepSeek API key (default: DEEPSEEK_API_KEY env)")
-	deepseekURL   := flag.String("deepseek-url", "https://api.deepseek.com/v1","DeepSeek API base URL")
-	deepseekModel  := flag.String("deepseek-model",   "deepseek-reasoner",  "Model: deepseek-reasoner (full R1 thinking) or deepseek-chat (fast)")
-	watchInterval  := flag.String("watch",            "",                   "Re-run on this interval (e.g. 5m, 1h). Stops on SIGINT/SIGTERM.")
-	sampleStrategy := flag.String("sample-strategy",  "random",             "Sampling strategy: random, stratified, diverse")
-	semanticLabels := flag.Bool("semantic-labels",    false,                "Generate semantic cluster labels via DeepSeek (requires --deepseek-key)")
-	incremental    := flag.Bool("incremental",        false,                "Only extract unstamped points (skip previously analyzed)")
+	showVersion := flag.Bool("version", false, "Print version and exit")
+	collection := flag.String("collection", "", "Qdrant collection name (required)")
+	sampleSize := flag.Int("sample", 0, "Number of vectors to sample (0 = entire collection)")
+	batchSize := flag.Int("batch-size", 5000, "Vectors per batch during extraction")
+	strict := flag.Bool("strict", false, "Fail immediately if any batch errors (default: stop early and continue)")
+	vectorName := flag.String("vector-name", "", "Named vector to extract when points contain multiple named vectors")
+	vectorCombine := flag.Bool("vector-combine", false, "Average all named vectors element-wise instead of selecting one")
+	outputPath := flag.String("output", "./findings", "Output directory for reports")
+	qdrantURL := flag.String("qdrant-url", "", "Qdrant URL (default: QDRANT_URL env or http://localhost:6333)")
+	deepseekKey := flag.String("deepseek-key", "", "DeepSeek API key (default: DEEPSEEK_API_KEY env)")
+	deepseekURL := flag.String("deepseek-url", "https://api.deepseek.com/v1", "DeepSeek API base URL")
+	deepseekModel := flag.String("deepseek-model", "deepseek-reasoner", "Model: deepseek-reasoner (full R1 thinking) or deepseek-chat (fast)")
+	watchInterval := flag.String("watch", "", "Re-run on this interval (e.g. 5m, 1h). Stops on SIGINT/SIGTERM.")
+	sampleStrategy := flag.String("sample-strategy", "random", "Sampling strategy: random, stratified, diverse")
+	semanticLabels := flag.Bool("semantic-labels", false, "Generate semantic cluster labels via DeepSeek (requires --deepseek-key)")
+	incremental := flag.Bool("incremental", false, "Only extract unstamped points (skip previously analyzed)")
+	minClusterSize := flag.Int("min-cluster-size", 5, "Minimum HDBSCAN cluster size")
+	minSamples := flag.Int("min-samples", 3, "HDBSCAN min_samples (smaller = less noise)")
 	flag.Parse()
 
 	if *showVersion {
@@ -265,6 +293,8 @@ func main() {
 		sampleSize:     *sampleSize,
 		batchSize:      *batchSize,
 		strict:         *strict,
+		vectorName:     *vectorName,
+		vectorCombine:  *vectorCombine,
 		outputPath:     *outputPath,
 		qdrantURL:      qdrant,
 		deepseekKey:    dsKey,
@@ -273,6 +303,12 @@ func main() {
 		sampleStrategy: *sampleStrategy,
 		semanticLabels: *semanticLabels,
 		incremental:    *incremental,
+		minClusterSize: *minClusterSize,
+		minSamples:     *minSamples,
+	}
+	if err := validateConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Watch mode

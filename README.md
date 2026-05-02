@@ -109,9 +109,17 @@ If no DeepSeek key is provided, topology/anomaly phases still run and reasoning 
 # Fast reasoning model
 ./vectoreologist --collection kae_chunks --deepseek-model deepseek-chat
 
-# Version
+# Use a specific named vector from multi-vector collections
+./vectoreologist --collection kae_chunks --vector-name summary_vec
+
+# Combine all named vectors into a single averaged vector
+./vectoreologist --collection kae_chunks --vector-combine
+
+# Print version
 ./vectoreologist --version
 ```
+
+Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-cluster-size > 0`, `--min-samples > 0`).
 
 ### Flags
 
@@ -119,18 +127,22 @@ If no DeepSeek key is provided, topology/anomaly phases still run and reasoning 
 |---|---|---|
 | `--collection` | _(required)_ | Qdrant collection name |
 | `--sample` | `0` | Number of vectors to sample (`0` = entire collection) |
-| `--batch-size` | `5000` | Extraction batch size |
-| `--strict` | `false` | Fail immediately on batch errors |
-| `--output` | `./findings` | Output directory |
-| `--qdrant-url` | env `QDRANT_URL` or `http://localhost:6333` | Qdrant URL |
-| `--deepseek-key` | env `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `--batch-size` | `5000` | Vectors per batch during extraction |
+| `--strict` | `false` | Fail immediately if any extraction batch errors |
+| `--vector-name` | `""` | Named vector to extract when points contain multiple named vectors |
+| `--vector-combine` | `false` | Average all named vectors element-wise instead of selecting one |
+| `--output` | `./findings` | Report output directory |
+| `--qdrant-url` | `QDRANT_URL` or `http://localhost:6333` | Qdrant server URL |
+| `--deepseek-key` | `DEEPSEEK_API_KEY` | DeepSeek API key |
 | `--deepseek-url` | `https://api.deepseek.com/v1` | DeepSeek API base URL |
-| `--deepseek-model` | `deepseek-reasoner` | Reasoner model (`deepseek-reasoner` or `deepseek-chat`) |
-| `--watch` | unset | Repeat run interval (`5m`, `1h`, etc.) |
-| `--sample-strategy` | `random` | `random`, `stratified`, `diverse` |
+| `--deepseek-model` | `deepseek-reasoner` | `deepseek-reasoner` (R1, full chains) or `deepseek-chat` (fast) |
+| `--watch` | `""` | Re-run on an interval (for example `5m`, `1h`) |
+| `--sample-strategy` | `random` | Sampling strategy: `random`, `stratified`, `diverse` |
 | `--semantic-labels` | `false` | Generate semantic cluster labels via DeepSeek |
-| `--incremental` | `false` | Only extract unstamped points |
-| `--version` | `false` | Print version and exit |
+| `--incremental` | `false` | Only extract points not stamped by prior runs |
+| `--min-cluster-size` | `5` | Minimum HDBSCAN cluster size |
+| `--min-samples` | `3` | HDBSCAN `min_samples` |
+| `--version` | — | Print version and exit |
 
 ---
 

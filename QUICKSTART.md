@@ -146,6 +146,16 @@ Open `findings/vectoreology_*.md` to see:
 diff findings/kae/vectoreology_*.md findings/gpt/vectoreology_*.md
 ```
 
+### Use a specific named vector
+```bash
+./vectoreologist --collection kae_chunks --vector-name summary_vec
+```
+
+### Combine all named vectors
+```bash
+./vectoreologist --collection kae_chunks --vector-combine
+```
+
 ---
 
 ## 7. Troubleshooting
@@ -188,6 +198,12 @@ Each R1 call has a 5-minute timeout. For large cluster counts use fast mode:
 make clean
 make deps
 make build
+```
+
+### "Error: --batch-size must be > 0" (or similar flag validation errors)
+Use valid numeric bounds:
+```bash
+./vectoreologist --collection kae_chunks --sample 5000 --batch-size 1000 --min-cluster-size 5 --min-samples 3
 ```
 
 ---

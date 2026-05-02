@@ -31,7 +31,7 @@ func New(apiURL, apiKey string) *Reasoner {
 
 func New2(apiURL, apiKey, model string) *Reasoner {
 	return &Reasoner{
-		apiURL: apiURL,
+		apiURL: strings.TrimRight(apiURL, "/"),
 		apiKey: apiKey,
 		model:  model,
 		client: &http.Client{Timeout: callTimeout},
@@ -102,6 +102,7 @@ func (r *Reasoner) ReasonAboutTopology(
 			ReasoningChain: formatForReport(resp),
 			Confidence:     0.75,
 			IsAnomaly:      cluster.Coherence < 0.5,
+			Clusters:       []int{cluster.ID},
 		})
 	}
 
@@ -120,6 +121,7 @@ func (r *Reasoner) ReasonAboutTopology(
 			Subject:        subject,
 			ReasoningChain: formatForReport(resp),
 			Confidence:     0.75,
+			Clusters:       []int{bridge.ClusterA, bridge.ClusterB},
 		})
 	}
 
@@ -160,8 +162,14 @@ func (r *Reasoner) callDeepSeek(prompt string) (*deepSeekResponse, error) {
 		"temperature": 0,
 	}
 
-	jsonData, _ := json.Marshal(reqBody)
-	req, _ := http.NewRequest("POST", r.apiURL+"/chat/completions", bytes.NewBuffer(jsonData))
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	req, err := http.NewRequest("POST", r.apiURL+"/chat/completions", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+r.apiKey)
 
@@ -171,7 +179,13 @@ func (r *Reasoner) callDeepSeek(prompt string) (*deepSeekResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("deepseek API error %s: %s", resp.Status, string(body))
+	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -188,7 +202,7 @@ func (r *Reasoner) callDeepSeek(prompt string) (*deepSeekResponse, error) {
 	}
 
 	conclusion, _ := msg["content"].(string)
-	thinking, _   := msg["reasoning_content"].(string)
+	thinking, _ := msg["reasoning_content"].(string)
 
 	return &deepSeekResponse{thinking: thinking, conclusion: conclusion}, nil
 }

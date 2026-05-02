@@ -19,8 +19,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   uninformative (e.g. `kae_lens_findings`), `ReasonAboutTopology` now fetches up to 5 text
   payload fragments from each cluster's member vectors and includes them in the R1 prompt so
   the model reasons about actual content rather than just topology metrics.
+- **Named vector selection controls for extraction** — added `--vector-name` to target a
+  specific Qdrant named vector and `--vector-combine` to average all named vectors element-wise
+  for multi-vector collections. When neither flag is set, extraction keeps the existing fallback
+  behavior (first available named vector, or the single dense vector when present).
 
 ### Fixed
+- **DeepSeek client is now failure-safe and status-aware** — request build/marshal/read errors are
+  returned explicitly, non-2xx responses fail fast with status + body context, and API base URLs
+  are normalized to avoid accidental `//chat/completions` path construction.
+- **UUID point IDs are converted deterministically and safely** — extraction now decodes the first
+  8 UUID bytes via hex decoding instead of fragile scanning logic, with invalid UUIDs returning 0
+  consistently.
+- **CLI validates critical numeric flags early** — invalid values for `--sample`, `--batch-size`,
+  `--min-cluster-size`, and `--min-samples` now fail with clear errors before pipeline execution.
 - **Bridge prompts now include actual content** — `buildBridgePrompt` previously passed only
   cluster IDs and a strength float to R1, producing generic placeholder reasoning chains. It
   now accepts the `byID` fragment map and injects text snippets from both sides of the bridge

@@ -126,11 +126,12 @@ func TestCallDeepSeek_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	r := New2(srv.URL, "test-key", "deepseek-chat")
-	// A 500 still returns a body; the body will be invalid for our parser.
-	// The important thing is that the function does not panic and returns an error.
 	_, err := r.callDeepSeek("test prompt")
 	if err == nil {
 		t.Fatal("expected an error on 500 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "deepseek API error 500") {
+		t.Fatalf("expected status-specific API error, got: %v", err)
 	}
 }
 
