@@ -32,7 +32,7 @@ Qdrant → Sample Strategy → Vectors + Metadata
 
 ### Phase 2: Topology Analysis
 ```
-Vectors → UMAP Reduction → HDBSCAN Clustering → Graph Construction
+Vectors → PCA Reduction → DBSCAN Clustering → Graph Construction
 ```
 
 **Key metrics:**
@@ -147,17 +147,17 @@ Track how vector clusters evolve over time.
 
 ## Performance Considerations
 
-- **Memory**: 5000 vectors × 1536 dims × 4 bytes = ~30MB
-- **Clustering**: HDBSCAN scales O(n log n)
-- **UMAP**: Dimensionality reduction for visualization only
+- **Memory**: 5000 vectors × 1536 dims × 4 bytes = ~30MB; PCA covariance matrix is d×d (not n×d), bounded regardless of collection size
+- **Clustering**: DBSCAN with precomputed neighbour lists, parallel across all CPU cores; PCA via covariance matrix O(n·d²) — parallel, bounded by d×d not n×d
 - **DeepSeek calls**: Rate-limited, async batch processing
 
 ## Dependencies
 
 - `github.com/qdrant/go-client` - Qdrant interaction
 - `github.com/spf13/cobra` - CLI framework
-- UMAP implementation (TODO: evaluate go-umap or Python bridge)
-- HDBSCAN implementation (TODO: evaluate options)
+- `gonum.org/v1/gonum` - PCA (EigenSym) and matrix operations
+- `github.com/redis/go-redis/v9` - optional Redis vector workspace
+- No Python required
 
 ## Example Workflow
 

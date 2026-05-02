@@ -3,9 +3,13 @@
 ## Current Status (2026-04)
 
 ### Completed
+- Pure Go PCA + DBSCAN clustering (replaces Python subprocess entirely — no umap-learn, hdbscan, or Python required)
+- Redis vector workspace (`--redis-url`) for streaming extraction on large collections
+- `scripts/start-redis.sh` Docker setup for Redis
+- `docker-compose.yml` for Qdrant + Redis
 - Core `vectoreologist` CLI pipeline is working end-to-end:
   - Qdrant extraction (batched)
-  - UMAP + HDBSCAN clustering via embedded `cluster.py`
+  - PCA + DBSCAN clustering (pure Go, in-process)
   - Bridge/moat detection
   - Anomaly detection
   - DeepSeek reasoning integration (`deepseek-reasoner` and `deepseek-chat`)

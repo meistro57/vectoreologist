@@ -6,7 +6,7 @@ Agent guidance for working in this repository.
 
 ## What this project is
 
-Knowledge archaeology engine for vector space topology. It pulls vector embeddings from Qdrant, runs real UMAP + HDBSCAN clustering via an embedded Python script, detects semantic anomalies, and uses DeepSeek R1 to reason visibly about what the vector space means. Output is timestamped markdown reports + findings stored back to Qdrant.
+Knowledge archaeology engine for vector space topology. It pulls vector embeddings from Qdrant, runs pure Go PCA + DBSCAN clustering, detects semantic anomalies, and uses DeepSeek R1 to reason visibly about what the vector space means. Output is timestamped markdown reports + findings stored back to Qdrant.
 
 ---
 
@@ -30,11 +30,13 @@ cmd/vectoreologist/main.go      CLI entry, flag wiring, .env loading, pipeline o
 internal/models/models.go       Shared types: VectorMetadata, Cluster, Bridge, Moat, Finding
 internal/excavator/qdrant.go    Qdrant gRPC client — Extract(collection, limit)
 internal/excavator/sampler.go   Sampling strategies: Random, Stratified, Diverse, Temporal
-internal/topology/clusterer.go  Shells out to embedded cluster.py; FindBridges, FindMoats
-internal/topology/cluster.py    UMAP + HDBSCAN Python script, embedded in binary via go:embed
+internal/topology/clusterer.go  PCA+DBSCAN pipeline, SetClusterParams, FindBridges, FindMoats
+internal/topology/pca.go        pcaReduce(): parallel covariance-matrix PCA via gonum EigenSym
+internal/topology/dbscan.go     runDBSCAN(), buildNeighborLists(), unitCosineDistance(), l2Normalise()
 internal/anomaly/detector.go    DetectClusterAnomalies, DetectOrphans, DetectContradictions
 internal/reasoner/deepseek.go   DeepSeek API client; extracts reasoning_content for R1
 internal/synthesis/report.go    GenerateReport (markdown), StoreFindings (Qdrant stub)
+internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors, Delete; binary float32 encoding
 ```
 
 ---
@@ -47,11 +49,19 @@ internal/synthesis/report.go    GenerateReport (markdown), StoreFindings (Qdrant
 - Max gRPC receive message size is set to **256 MB** — large collections need this.
 - `ScrollPoints.Limit` is `*uint32`, not `uint32`.
 
-### Python clustering
-- `cluster.py` is embedded via `//go:embed cluster.py` in `clusterer.go`.
-- At runtime it's written to a temp file and called as `python3 <script> <input.json>`.
-- Requires `umap-learn hdbscan numpy` — if missing, `AnalyzeClusters` returns nil and logs a helpful install message.
-- UMAP warnings are suppressed with `warnings.filterwarnings("ignore")` inside the script.
+### Go clustering
+- `pcaDims = 50` constant in `pca.go` — vectors are reduced to 50 dimensions before DBSCAN.
+- PCA uses the covariance-matrix approach: only a d×d float64 matrix is allocated (never n×d), then `mat.EigenSym` from gonum decomposes it.
+- L2-normalisation (`l2Normalise`) is applied to every vector before DBSCAN.
+- DBSCAN default epsilon is `0.3` (cosine distance ≈ 70% similarity threshold), configurable with `--epsilon`.
+- `buildNeighborLists` precomputes all pairwise neighbours in parallel using atomic counters.
+- `MaxTopologyTotal = 20000` — input is random-sampled to this cap before PCA runs.
+
+### Redis workspace
+- Optional: enabled only when `--redis-url` is non-empty.
+- Vectors are stored as binary float32 blobs; keys follow `veo:{runID}:{vec|meta|info}:{batchNum}`.
+- TTL is 1 hour on all keys; `Delete()` is called at run end for explicit early cleanup.
+- With Redis enabled, extraction streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded back into Go RAM for topology.
 
 ### DeepSeek reasoning
 - Default model is `deepseek-reasoner` (R1). Each call can take up to 5 minutes — timeout is set accordingly.
@@ -74,14 +84,14 @@ internal/synthesis/report.go    GenerateReport (markdown), StoreFindings (Qdrant
 
 - **No mocks for Qdrant** — tests that need the client bypass the constructor using unexported struct fields or helper constructors (see `synthesis/report_test.go`'s `newTestSynthesizer`).
 - **DeepSeek is mocked** with `httptest.NewServer` — never makes real API calls in tests.
-- **Topology Python tests** use `t.Skip` if `umap`/`hdbscan` are absent, or inject a fake script via PATH manipulation.
+- **Topology tests are pure Go** — no Python, no PATH manipulation; PCA tests verify output shape and cluster separability; DBSCAN tests cover cluster formation, noise, and symmetry; Redis integration tests skip gracefully when Redis is unavailable.
 - Table-driven tests throughout; standard `testing` package only.
 
 ---
 
 ## CI / release
 
-- **CI** (`ci.yml`): triggers on push/PR to main — `go vet` then `go test -count=1 -timeout=10m ./...` with Python 3.11 + umap-learn + hdbscan installed.
+- **CI** (`ci.yml`): triggers on push/PR to main — `go vet` then `go test -count=1 -timeout=10m ./...`; no external services required beyond Go and Redis (workspace integration tests skip when Redis is absent).
 - **Release** (`release.yml`): push a `v*` tag → builds 5 cross-platform binaries → GitHub release with CHANGELOG section as body.
 - `CHANGELOG.md` uses Keep-a-Changelog format. Add an entry under `[Unreleased]` for any notable change; the release workflow extracts the matching `[x.y.z]` section automatically.
 
@@ -90,7 +100,7 @@ internal/synthesis/report.go    GenerateReport (markdown), StoreFindings (Qdrant
 ## What's stubbed / incomplete
 
 - `synthesis.StoreFindings` — the Qdrant write path is a no-op stub (TODOs in place).
-- `topology.AnalyzeClusters` cluster labels come from dominant `layer/source` metadata — not semantically meaningful yet.
+- `topology.AnalyzeClusters` cluster labels come from dominant `layer/source` metadata of member vectors — not semantically meaningful yet.
 - `excavator.Sampler` strategies `Diverse` and `Temporal` fall back to random sampling.
 - No streaming for DeepSeek responses — full response is buffered before printing.
 

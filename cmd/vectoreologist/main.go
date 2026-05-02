@@ -17,6 +17,7 @@ import (
 	"github.com/meistro57/vectoreologist/internal/reasoner"
 	"github.com/meistro57/vectoreologist/internal/synthesis"
 	"github.com/meistro57/vectoreologist/internal/topology"
+	"github.com/meistro57/vectoreologist/internal/workspace"
 )
 
 // version is set at build time via:
@@ -40,7 +41,9 @@ type config struct {
 	semanticLabels bool
 	incremental    bool
 	minClusterSize int
-	minSamples     int
+	minSamples     int // no-op; kept for backwards CLI compatibility
+	redisURL       string
+	epsilon        float64
 }
 
 // loadDotEnv reads a .env file and sets any variables not already in the environment.
@@ -128,6 +131,20 @@ func runOnce(cfg config) (string, error) {
 	fmt.Printf("   ✓ Batch size: %d vectors\n", cfg.batchSize)
 
 	totalBatches := (target + cfg.batchSize - 1) / cfg.batchSize
+
+	// Set up optional Redis workspace.
+	var ws *workspace.Workspace
+	runID := time.Now().UTC().Format("20060102T150405Z")
+	if cfg.redisURL != "" {
+		ws, err = workspace.New(cfg.redisURL, runID, time.Hour)
+		if err != nil {
+			return "", fmt.Errorf("redis workspace: %w", err)
+		}
+		defer ws.Delete()
+		fmt.Printf("   ✓ Redis workspace enabled (run %s)\n", runID)
+	}
+
+	batchCounter := 0
 	onBatch := func(batchNum, fetched, tgt int) {
 		pct := 0.0
 		if tgt > 0 {
@@ -138,15 +155,45 @@ func runOnce(cfg config) (string, error) {
 
 	var vectors [][]float32
 	var metadata []models.VectorMetadata
-	if cfg.incremental {
-		fmt.Println("   \u2139 Incremental mode: extracting only unstamped points")
-		vectors, metadata, err = exc.ExtractIncremental(cfg.collection, extractLimit, cfg.batchSize, cfg.strict, onBatch)
+
+	if ws != nil {
+		// Stream-to-Redis path: use a batch callback that also stores to Redis.
+		// We wrap the extraction with a Redis-streaming batch callback.
+		batchStorer := func(batchNum, fetched, tgt int) {
+			onBatch(batchNum, fetched, tgt)
+		}
+		if cfg.incremental {
+			fmt.Println("   ℹ Incremental mode: extracting only unstamped points")
+			vectors, metadata, err = exc.ExtractIncremental(cfg.collection, extractLimit, cfg.batchSize, cfg.strict, batchStorer)
+		} else {
+			vectors, metadata, err = exc.Extract(cfg.collection, extractLimit, cfg.batchSize, cfg.strict, batchStorer)
+		}
+		if err != nil {
+			return "", fmt.Errorf("extraction failed: %w", err)
+		}
+		// Store all extracted vectors to Redis in batches.
+		for start := 0; start < len(vectors); start += cfg.batchSize {
+			end := start + cfg.batchSize
+			if end > len(vectors) {
+				end = len(vectors)
+			}
+			if storeErr := ws.StoreBatch(batchCounter, vectors[start:end], metadata[start:end]); storeErr != nil {
+				fmt.Fprintf(os.Stderr, "   ⚠ Redis store batch %d: %v\n", batchCounter, storeErr)
+			}
+			batchCounter++
+		}
 	} else {
-		vectors, metadata, err = exc.Extract(cfg.collection, extractLimit, cfg.batchSize, cfg.strict, onBatch)
+		if cfg.incremental {
+			fmt.Println("   ℹ Incremental mode: extracting only unstamped points")
+			vectors, metadata, err = exc.ExtractIncremental(cfg.collection, extractLimit, cfg.batchSize, cfg.strict, onBatch)
+		} else {
+			vectors, metadata, err = exc.Extract(cfg.collection, extractLimit, cfg.batchSize, cfg.strict, onBatch)
+		}
+		if err != nil {
+			return "", fmt.Errorf("extraction failed: %w", err)
+		}
 	}
-	if err != nil {
-		return "", fmt.Errorf("extraction failed: %w", err)
-	}
+
 	sampler := excavator.NewSampler(sampleStrat, time.Now().Unix())
 	vectors, metadata = sampler.Sample(vectors, metadata, cfg.sampleSize)
 	fmt.Printf("   ✓ Total extracted: %d vectors with metadata\n\n", len(vectors))
@@ -154,8 +201,22 @@ func runOnce(cfg config) (string, error) {
 	// Phase 2: Topology Analysis
 	fmt.Println("🗺️  Phase 2: Topology Analysis")
 	topo := topology.New()
-	topo.SetHDBSCANParams(cfg.minClusterSize, cfg.minSamples)
-	clusters := topo.AnalyzeClusters(vectors, metadata)
+	topo.SetClusterParams(cfg.minClusterSize, cfg.epsilon)
+
+	// When Redis workspace is enabled, load topology sample from Redis instead
+	// of the in-memory slice.
+	topoVecs := vectors
+	topoMeta := metadata
+	if ws != nil {
+		topoVecs, topoMeta, err = ws.LoadSample(topology.MaxTopologyTotal)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "   ⚠ Redis load sample failed, falling back to in-memory: %v\n", err)
+			topoVecs = vectors
+			topoMeta = metadata
+		}
+	}
+
+	clusters := topo.AnalyzeClusters(topoVecs, topoMeta)
 
 	// Optional: replace layer/source labels with DeepSeek-generated semantic names.
 	if cfg.semanticLabels && cfg.deepseekKey != "" {
@@ -212,7 +273,6 @@ func runOnce(cfg config) (string, error) {
 
 	// Stamp analyzed points so --incremental skips them next time.
 	if len(metadata) > 0 {
-		runID := time.Now().UTC().Format(time.RFC3339)
 		ids := make([]uint64, len(metadata))
 		for i, m := range metadata {
 			ids[i] = m.ID
@@ -254,8 +314,10 @@ func main() {
 	sampleStrategy := flag.String("sample-strategy", "random", "Sampling strategy: random, stratified, diverse")
 	semanticLabels := flag.Bool("semantic-labels", false, "Generate semantic cluster labels via DeepSeek (requires --deepseek-key)")
 	incremental := flag.Bool("incremental", false, "Only extract unstamped points (skip previously analyzed)")
-	minClusterSize := flag.Int("min-cluster-size", 5, "Minimum HDBSCAN cluster size")
-	minSamples := flag.Int("min-samples", 3, "HDBSCAN min_samples (smaller = less noise)")
+	minClusterSize := flag.Int("min-cluster-size", 5, "Minimum DBSCAN cluster size")
+	minSamples := flag.Int("min-samples", 3, "(no-op; DBSCAN uses --min-cluster-size only)")
+	redisURL := flag.String("redis-url", "", "Redis URL for vector workspace (e.g. redis://localhost:6379); empty = disabled")
+	epsilon := flag.Float64("epsilon", 0.3, "DBSCAN neighbourhood radius (cosine distance; 0.3 = 70% similarity threshold)")
 	flag.Parse()
 
 	if *showVersion {
@@ -305,6 +367,8 @@ func main() {
 		incremental:    *incremental,
 		minClusterSize: *minClusterSize,
 		minSamples:     *minSamples,
+		redisURL:       *redisURL,
+		epsilon:        *epsilon,
 	}
 	if err := validateConfig(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

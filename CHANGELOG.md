@@ -9,6 +9,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+- **Pure Go PCA + DBSCAN clustering** — topology analysis is now fully in-process; no Python subprocess, no `cluster.py`, no `umap-learn`/`hdbscan` dependency. `internal/topology/pca.go` implements PCA via the covariance-matrix approach (only a d×d float64 allocation — never n×d), and `internal/topology/dbscan.go` implements DBSCAN with parallel neighbour precomputation across all CPU cores. Default epsilon 0.3 (cosine distance ≈ 70% similarity threshold), configurable with `--epsilon`.
+- **Redis vector workspace** (`internal/workspace`) — optional `--redis-url` flag streams extracted vector batches to Redis using binary float32 encoding during extraction, keeping Go's heap at O(batch_size) instead of O(total_vectors). `LoadSample` draws a random subset for topology analysis, loading only the batches that contain sampled vectors. Keys are namespaced `veo:{runID}:*` and expire after 1 hour.
+- **`scripts/start-redis.sh`** — installs and starts a `redis:7-alpine` Docker container (`vectoreologist-redis`, port 6379, 2 GB `allkeys-lru` policy, `--restart unless-stopped`). Safe to re-run: starts an existing stopped container rather than recreating it.
+- **`docker-compose.yml`** — Qdrant + Redis services with named volumes for persistent storage.
+
+### Changed
+- `SetHDBSCANParams(minClusterSize, minSamples int)` renamed to `SetClusterParams(minClusterSize int, epsilon float64)`. The `--min-samples` flag is retained but is now a no-op.
+- `gonum.org/v1/gonum v0.15.1` and `github.com/redis/go-redis/v9 v9.7.3` added to `go.mod`.
+
+### Removed
+- `internal/topology/cluster.py` — embedded Python clustering script removed entirely; all clustering is now pure Go.
+- Python runtime dependency — `umap-learn`, `hdbscan`, `numpy`, `scikit-learn` are no longer required.
+
 ### Fixed
 - **Topology phase OOM kill eliminated** — Phase 2 no longer gets killed on large or
   high-dimensional collections. Three-layer fix:

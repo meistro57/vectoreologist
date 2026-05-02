@@ -7,16 +7,18 @@
 go version
 ```
 
-**Python 3.10+ with ML dependencies**
-```bash
-pip install umap-learn hdbscan numpy
-```
-
 **Qdrant running**
 ```bash
 docker ps | grep qdrant
 # If not running:
 docker run -d -p 6333:6333 qdrant/qdrant
+```
+
+**Redis (optional, for large collections)**
+```bash
+./scripts/start-redis.sh
+# Pulls redis:7-alpine and starts the vectoreologist-redis container on port 6379.
+# Safe to re-run — starts an existing stopped container rather than recreating it.
 ```
 
 ---
@@ -113,7 +115,7 @@ Key Insights:
 Read full analysis: findings/vectoreology_2026-04-14_21-27-41.md
 ```
 
-**Noise vectors**: HDBSCAN naturally excludes outliers that don't belong to any cluster — these are reported but not analysed further.
+**Noise vectors**: DBSCAN naturally excludes outliers that don't belong to any cluster — these are reported but not analysed further.
 
 **Phase 4 speed**: DeepSeek R1 (`deepseek-reasoner`) reasons about every cluster + the top 10 bridges + top 5 moats. Each call can take 20–90 seconds. Use `--deepseek-model deepseek-chat` for fast mode (no chain-of-thought, results in seconds).
 
@@ -156,6 +158,12 @@ diff findings/kae/vectoreology_*.md findings/gpt/vectoreology_*.md
 ./vectoreologist --collection kae_chunks --vector-combine
 ```
 
+### Large collection with Redis workspace
+```bash
+./scripts/start-redis.sh
+./vectoreologist --collection meta_reflections --redis-url redis://localhost:6379
+```
+
 ---
 
 ## 7. Troubleshooting
@@ -182,9 +190,9 @@ cat .env | grep DEEPSEEK_API_KEY
 ./vectoreologist --collection kae_chunks --deepseek-key sk-...
 ```
 
-### "missing dependency: No module named 'umap'" 
+### "Redis connection refused"
 ```bash
-pip install umap-learn hdbscan numpy
+./scripts/start-redis.sh
 ```
 
 ### Phase 4 hangs / times out
@@ -203,7 +211,7 @@ make build
 ### "Error: --batch-size must be > 0" (or similar flag validation errors)
 Use valid numeric bounds:
 ```bash
-./vectoreologist --collection kae_chunks --sample 5000 --batch-size 1000 --min-cluster-size 5 --min-samples 3
+./vectoreologist --collection kae_chunks --sample 5000 --batch-size 1000 --min-cluster-size 5
 ```
 
 ---

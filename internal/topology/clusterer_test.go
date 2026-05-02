@@ -1,12 +1,7 @@
 package topology
 
 import (
-	"encoding/json"
 	"math"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/meistro57/vectoreologist/internal/models"
@@ -319,49 +314,34 @@ func TestFindMoats_NoDuplicatePairs(t *testing.T) {
 
 func TestNew_DefaultParams(t *testing.T) {
 	top := New()
-	if top.neighbors != 15 {
-		t.Errorf("neighbors: want 15, got %d", top.neighbors)
-	}
-	if top.minDist != 0.1 {
-		t.Errorf("minDist: want 0.1, got %v", top.minDist)
-	}
 	if top.minClusterSize != 5 {
 		t.Errorf("minClusterSize: want 5, got %d", top.minClusterSize)
 	}
-	if top.minSamples != 3 {
-		t.Errorf("minSamples: want 3, got %d", top.minSamples)
+	if math.Abs(top.epsilon-0.3) > 1e-9 {
+		t.Errorf("epsilon: want 0.3, got %v", top.epsilon)
 	}
 }
 
-func TestSetHDBSCANParams(t *testing.T) {
+func TestSetClusterParams(t *testing.T) {
 	top := New()
-	top.SetHDBSCANParams(8, 4)
+	top.SetClusterParams(8, 0.25)
 	if top.minClusterSize != 8 {
 		t.Errorf("minClusterSize: want 8, got %d", top.minClusterSize)
 	}
-	if top.minSamples != 4 {
-		t.Errorf("minSamples: want 4, got %d", top.minSamples)
+	if math.Abs(top.epsilon-0.25) > 1e-9 {
+		t.Errorf("epsilon: want 0.25, got %v", top.epsilon)
 	}
-	top.SetHDBSCANParams(0, -1)
+	// Non-positive values should be ignored.
+	top.SetClusterParams(0, -1)
 	if top.minClusterSize != 8 {
 		t.Errorf("minClusterSize should remain 8, got %d", top.minClusterSize)
 	}
-	if top.minSamples != 4 {
-		t.Errorf("minSamples should remain 4, got %d", top.minSamples)
+	if math.Abs(top.epsilon-0.25) > 1e-9 {
+		t.Errorf("epsilon should remain 0.25, got %v", top.epsilon)
 	}
 }
 
 // ---- AnalyzeClusters --------------------------------------------------------
-
-// checkPythonDeps returns true if python3 is available and umap-learn/hdbscan
-// are installed.  If not, the test should be skipped.
-func checkPythonDeps() bool {
-	if _, err := exec.LookPath("python3"); err != nil {
-		return false
-	}
-	cmd := exec.Command("python3", "-c", "import umap, hdbscan, numpy")
-	return cmd.Run() == nil
-}
 
 func TestAnalyzeClusters_EmptyInput(t *testing.T) {
 	top := New()
@@ -371,182 +351,93 @@ func TestAnalyzeClusters_EmptyInput(t *testing.T) {
 	}
 }
 
-func TestAnalyzeClusters_WithPython(t *testing.T) {
-	if !checkPythonDeps() {
-		t.Skip("python3 with umap-learn+hdbscan not available; skipping AnalyzeClusters test")
-	}
-
+func TestAnalyzeClusters_TwoClusters(t *testing.T) {
+	// 20 vectors near [1,0,0,0,0] and 20 near [0,1,0,0,0] (5D).
+	// With epsilon=0.3 and minClusterSize=3 these should cluster into 1-3 groups.
 	top := New()
-	// Build 30 simple 2-D vectors forming two loose blobs.
+	top.SetClusterParams(3, 0.3)
+
 	var vecs [][]float32
 	var meta []models.VectorMetadata
-	for i := 0; i < 15; i++ {
-		vecs = append(vecs, []float32{float32(i) * 0.1, 0})
-		meta = append(meta, models.VectorMetadata{ID: uint64(i), Source: "src_a", Layer: "deep"})
+
+	for i := 0; i < 20; i++ {
+		noise := float32(i) * 0.005
+		vecs = append(vecs, []float32{1.0 + noise, noise, noise, noise, noise})
+		meta = append(meta, models.VectorMetadata{ID: uint64(i + 1), Source: "a", Layer: "deep"})
 	}
-	for i := 15; i < 30; i++ {
-		vecs = append(vecs, []float32{float32(i) * 0.1, 1.0})
-		meta = append(meta, models.VectorMetadata{ID: uint64(i), Source: "src_b", Layer: "surface"})
+	for i := 0; i < 20; i++ {
+		noise := float32(i) * 0.005
+		vecs = append(vecs, []float32{noise, 1.0 + noise, noise, noise, noise})
+		meta = append(meta, models.VectorMetadata{ID: uint64(i + 21), Source: "b", Layer: "surface"})
 	}
 
 	clusters := top.AnalyzeClusters(vecs, meta)
-	// With HDBSCAN on this well-separated data we should get at least 1 cluster.
-	if len(clusters) == 0 {
-		t.Error("expected at least 1 cluster from non-trivial input")
+	if len(clusters) < 1 {
+		t.Errorf("expected >= 1 cluster, got %d", len(clusters))
+	}
+	if len(clusters) > 3 {
+		t.Errorf("expected <= 3 clusters, got %d", len(clusters))
 	}
 }
 
-func TestAnalyzeClusters_WithFakePython(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake python script injection not supported on Windows")
-	}
+// ---- PCA tests --------------------------------------------------------------
 
-	// Build a minimal well-formed cluster JSON response.
-	fakeOutput := clusterOutput{
-		Clusters: []struct {
-			ID        int       `json:"id"`
-			Label     string    `json:"label"`
-			VectorIDs []uint64  `json:"vector_ids"`
-			Centroid  []float32 `json:"centroid"`
-			Density   float64   `json:"density"`
-			Size      int       `json:"size"`
-			Coherence float64   `json:"coherence"`
-		}{
-			{
-				ID:        1,
-				Label:     "surface / src",
-				VectorIDs: []uint64{1, 2},
-				Centroid:  []float32{0.5, 0.5},
-				Density:   0.6,
-				Size:      2,
-				Coherence: 0.8,
-			},
-		},
-		NoiseCount:   0,
-		TotalVectors: 2,
-	}
-	outJSON, err := json.Marshal(fakeOutput)
-	if err != nil {
-		t.Fatalf("could not marshal fake output: %v", err)
-	}
-
-	fakeDir := t.TempDir()
-
-	// Write the JSON response to a file; the fake script will cat it to stdout.
-	// This avoids shell quoting issues that arise when embedding JSON in echo.
-	jsonFile := filepath.Join(fakeDir, "response.json")
-	if err := os.WriteFile(jsonFile, outJSON, 0644); err != nil {
-		t.Fatalf("could not write response JSON: %v", err)
-	}
-
-	// Write a fake python3 stub that cats the pre-built JSON file.
-	fakePy := filepath.Join(fakeDir, "python3")
-	script := "#!/bin/sh\ncat " + jsonFile + "\n"
-	if err := os.WriteFile(fakePy, []byte(script), 0755); err != nil {
-		t.Fatalf("could not write fake python3: %v", err)
-	}
-
-	// Prepend fakeDir to PATH so exec.Command("python3",...) finds our stub.
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", fakeDir+string(os.PathListSeparator)+origPath)
-	defer os.Setenv("PATH", origPath)
-
-	top := New()
-	vecs := [][]float32{{1, 0}, {0, 1}}
-	meta := []models.VectorMetadata{
-		{ID: 1, Source: "src", Layer: "surface"},
-		{ID: 2, Source: "src", Layer: "surface"},
-	}
-	clusters := top.AnalyzeClusters(vecs, meta)
-
-	if len(clusters) != 1 {
-		t.Fatalf("want 1 cluster from fake python, got %d", len(clusters))
-	}
-	if clusters[0].ID != 1 {
-		t.Errorf("cluster ID: want 1, got %d", clusters[0].ID)
-	}
-	if clusters[0].Label != "surface / src" {
-		t.Errorf("cluster label: want 'surface / src', got %q", clusters[0].Label)
-	}
-	if clusters[0].Coherence != 0.8 {
-		t.Errorf("coherence: want 0.8, got %v", clusters[0].Coherence)
-	}
-}
-
-func TestAnalyzeClusters_ChunksLargeInput(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake python script injection not supported on Windows")
-	}
-
-	fakeDir := t.TempDir()
-	fakePy := filepath.Join(fakeDir, "python3")
-	// Returns one cluster whose size equals the number of metadata entries in the input.
-	script := "#!/bin/sh\ncount=$(grep -o '\"id\"' \"$2\" | wc -l | tr -d ' ')\nprintf '{\"clusters\":[{\"id\":1,\"label\":\"sampled\",\"vector_ids\":[1],\"centroid\":[0,0],\"density\":1,\"size\":%s,\"coherence\":1}],\"noise_count\":0,\"total_vectors\":%s}\\n' \"$count\" \"$count\"\n"
-	if err := os.WriteFile(fakePy, []byte(script), 0755); err != nil {
-		t.Fatalf("could not write fake python3: %v", err)
-	}
-
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", fakeDir+string(os.PathListSeparator)+origPath)
-	defer os.Setenv("PATH", origPath)
-
-	top := New()
-	total := MaxTopologyVectors + 123
-	vecs := make([][]float32, total)
-	meta := make([]models.VectorMetadata, total)
+func TestPCAReduce_ReducesDimension(t *testing.T) {
+	// 10 vectors of dimension 8, reduce to 3.
+	vecs := make([][]float32, 10)
 	for i := range vecs {
-		vecs[i] = []float32{float32(i), 0}
-		meta[i] = models.VectorMetadata{ID: uint64(i + 1)}
+		v := make([]float32, 8)
+		for j := range v {
+			v[j] = float32(i*8+j) * 0.1
+		}
+		vecs[i] = v
 	}
-
-	clusters := top.AnalyzeClusters(vecs, meta)
-	// Two chunks → two clusters with globally-offset IDs.
-	if len(clusters) != 2 {
-		t.Fatalf("want 2 clusters (one per chunk), got %d", len(clusters))
+	out := pcaReduce(vecs, 3)
+	if len(out) != 10 {
+		t.Fatalf("output row count: want 10, got %d", len(out))
 	}
-	if clusters[0].ID != 1 {
-		t.Errorf("chunk 1 cluster ID: want 1, got %d", clusters[0].ID)
-	}
-	if clusters[0].Size != MaxTopologyVectors {
-		t.Errorf("chunk 1 size: want %d, got %d", MaxTopologyVectors, clusters[0].Size)
-	}
-	if clusters[1].ID != 2 {
-		t.Errorf("chunk 2 cluster ID: want 2, got %d", clusters[1].ID)
-	}
-	if clusters[1].Size != 123 {
-		t.Errorf("chunk 2 size: want 123, got %d", clusters[1].Size)
+	for i, row := range out {
+		if len(row) != 3 {
+			t.Errorf("row %d: want dim 3, got %d", i, len(row))
+		}
 	}
 }
 
-func TestAnalyzeClusters_FakePythonBadJSON(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake python script injection not supported on Windows")
+func TestPCAReduce_NoOpWhenSmall(t *testing.T) {
+	// 10 vectors of dimension 3; asking for 10 components (>= d) → passthrough.
+	vecs := make([][]float32, 10)
+	for i := range vecs {
+		vecs[i] = []float32{float32(i), float32(i) * 2, float32(i) * 3}
 	}
-
-	fakeDir := t.TempDir()
-
-	// Write a response file containing invalid JSON.
-	badFile := filepath.Join(fakeDir, "bad.json")
-	if err := os.WriteFile(badFile, []byte("not valid json"), 0644); err != nil {
-		t.Fatalf("could not write bad JSON file: %v", err)
+	out := pcaReduce(vecs, 10)
+	// Should be the exact same slice (no copy).
+	if len(out) != len(vecs) {
+		t.Fatalf("want %d rows, got %d", len(vecs), len(out))
 	}
-
-	fakePy := filepath.Join(fakeDir, "python3")
-	script := "#!/bin/sh\ncat " + badFile + "\n"
-	if err := os.WriteFile(fakePy, []byte(script), 0755); err != nil {
-		t.Fatalf("could not write fake python3: %v", err)
+	for i := range vecs {
+		if len(out[i]) != 3 {
+			t.Errorf("row %d: want dim 3, got %d", i, len(out[i]))
+		}
 	}
+}
 
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", fakeDir+string(os.PathListSeparator)+origPath)
-	defer os.Setenv("PATH", origPath)
+// ---- L2 normalisation -------------------------------------------------------
 
-	top := New()
-	vecs := [][]float32{{1, 0}}
-	meta := []models.VectorMetadata{{ID: 1}}
-	clusters := top.AnalyzeClusters(vecs, meta)
-	// On bad JSON the function should return nil gracefully.
-	if len(clusters) != 0 {
-		t.Errorf("bad JSON from python: want 0 clusters, got %d", len(clusters))
+func TestL2Normalise_UnitLength(t *testing.T) {
+	vecs := [][]float32{
+		{3, 4},
+		{1, 0},
+		{0, 5},
+	}
+	l2Normalise(vecs)
+	for i, v := range vecs {
+		var norm float64
+		for _, x := range v {
+			norm += float64(x) * float64(x)
+		}
+		norm = math.Sqrt(norm)
+		if math.Abs(norm-1.0) > 1e-5 {
+			t.Errorf("row %d: want norm 1.0, got %v", i, norm)
+		}
 	}
 }

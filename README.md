@@ -5,10 +5,9 @@
 
 [![CI](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml/badge.svg)](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml)
 [![Go 1.23+](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Vectoreologist analyzes embedding topology in Qdrant collections using UMAP + HDBSCAN, detects anomalies, runs DeepSeek reasoning over the topology, writes timestamped markdown + JSON reports, stores findings in Qdrant, and includes a terminal lens for interactive exploration.
+Vectoreologist analyzes embedding topology in Qdrant collections using pure Go PCA + DBSCAN, detects anomalies, runs DeepSeek reasoning over the topology, writes timestamped markdown + JSON reports, stores findings in Qdrant, and includes a terminal lens for interactive exploration.
 
 ---
 
@@ -24,7 +23,7 @@ Vectoreologist analyzes embedding topology in Qdrant collections using UMAP + HD
  │ Excavate │    │  Topology   │    │ Anomalies│    │  Synthesis  │
  └──────────┘    └──────────────┘    └──────────┘    └──────────────┘
                        │                                     ▲
-                       │  PCA → UMAP → HDBSCAN               │
+                       │  PCA → DBSCAN (pure Go)             │
                        │  clusters, bridges, moats           │
                        ▼                                     │
                  ┌──────────────┐                            │
@@ -36,7 +35,7 @@ Vectoreologist analyzes embedding topology in Qdrant collections using UMAP + HD
                  └──────────────┘
 ```
 
-`internal/topology/cluster.py` is compiled into the binary via `go:embed` and spawned at runtime. It applies PCA pre-reduction before UMAP to stay memory-safe on large, high-dimensional collections.
+All topology analysis is implemented in Go (`internal/topology/pca.go`, `internal/topology/dbscan.go`). No Python subprocess is spawned.
 
 ---
 
@@ -44,7 +43,7 @@ Vectoreologist analyzes embedding topology in Qdrant collections using UMAP + HD
 
 1. **Extracts vectors + metadata** from a Qdrant collection over gRPC
 2. **Samples vectors** with `random`, `stratified`, or `diverse` strategy
-3. **Maps topology** — PCA pre-reduction → UMAP → HDBSCAN (memory-efficient, no OOM on large collections)
+3. **Maps topology** — PCA → DBSCAN (pure Go, parallel, no subprocess)
 4. **Finds structures**: clusters, semantic bridges, and moats
 5. **Detects anomalies**: cluster anomalies, orphans, and source contradictions
 6. **Reasons with DeepSeek** (R1 by default; chain-of-thought logged live)
@@ -60,7 +59,7 @@ Vectoreologist analyzes embedding topology in Qdrant collections using UMAP + HD
 ```
 vectoreologist (Go CLI)
   ├─ Phase 1: Excavation      Qdrant gRPC scroll, batched
-  ├─ Phase 2: Topology        embedded cluster.py — PCA → UMAP → HDBSCAN
+  ├─ Phase 2: Topology        pca.go + dbscan.go — PCA covariance → DBSCAN (in-process)
   ├─ Phase 3: Anomaly         low coherence, density outliers, orphans, contradictions
   ├─ Phase 4: Reasoning       DeepSeek R1 / chat — visible chain-of-thought
   └─ Phase 5: Synthesis       Markdown + JSON + Qdrant findings upsert
@@ -76,18 +75,10 @@ vectoreologist-lens (Bubble Tea TUI)
 | Dependency | Version | Purpose |
 |---|---|---|
 | Go | 1.23+ | Build binaries |
-| Python | 3.10+ | Run embedded clustering script |
-| umap-learn | latest | Dimensionality reduction |
-| hdbscan | latest | Clustering |
-| numpy | latest | Numeric ops |
-| scikit-learn | latest | PCA pre-reduction (installed with umap-learn) |
+| gonum.org/v1/gonum | v0.15.1 | PCA (EigenSym) + matrix ops |
 | Qdrant | running instance | Vector source + findings storage |
 | DeepSeek API key | optional | Reasoning + semantic labels |
-
-```bash
-pip install umap-learn hdbscan numpy
-# scikit-learn is pulled in automatically as a umap-learn dependency
-```
+| Redis | optional | Streaming workspace for large collections — Docker recommended: `./scripts/start-redis.sh` |
 
 ---
 
@@ -150,7 +141,7 @@ If no DeepSeek key is provided, topology and anomaly phases still run and reason
 ./vectoreologist --version
 ```
 
-Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-cluster-size > 0`, `--min-samples > 0`).
+Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-cluster-size > 0`).
 
 ### Flags
 
@@ -171,8 +162,10 @@ Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-c
 | `--sample-strategy` | `random` | Sampling strategy: `random`, `stratified`, `diverse` |
 | `--semantic-labels` | `false` | Generate semantic cluster labels via DeepSeek |
 | `--incremental` | `false` | Only extract points not stamped by prior runs |
-| `--min-cluster-size` | `5` | Minimum HDBSCAN cluster size |
-| `--min-samples` | `3` | HDBSCAN `min_samples` |
+| `--min-cluster-size` | `5` | Minimum DBSCAN cluster size |
+| `--min-samples` | `3` | (no-op; DBSCAN uses `--min-cluster-size` only) |
+| `--epsilon` | `0.3` | DBSCAN neighbourhood radius (cosine distance) |
+| `--redis-url` | `""` | Redis URL for vector workspace; empty = disabled |
 | `--version` | — | Print version and exit |
 
 ---
@@ -191,15 +184,11 @@ Each run emits:
 
 ## Memory & scale
 
-The topology phase is the most resource-intensive step. The pipeline uses three layers of protection against OOM kills:
+Topology analysis is fully in-process — no Python subprocess, no OOM guards needed. The pipeline caps input at `MaxTopologyTotal = 20,000` vectors, then PCA reduces to 50 dimensions in-process before DBSCAN runs. Peak RAM for topology is approximately 120–150 MB.
 
-| Guard | What it does |
-|---|---|
-| **Go-side cap** | Downsamples to 8,000 vectors before passing anything to Python |
-| **PCA pre-reduction** | Shrinks vectors to 50 dimensions before UMAP — cuts NN-graph memory ~30× for typical LLM embeddings (1536 → 50 dims) |
-| **`low_memory=True`** | Switches UMAP to an algorithm that avoids materialising the full distance matrix |
+For very large collections, pass `--redis-url redis://localhost:6379` to enable the Redis workspace. Extraction then streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded into Go RAM for topology. Run `./scripts/start-redis.sh` to start a local Redis container.
 
-For very large collections use `--sample` to control the extraction size and `--sample-strategy diverse` to ensure the sample covers the full vector space.
+Use `--sample` to limit extraction size and `--sample-strategy diverse` to maximise vector-space coverage.
 
 ---
 
