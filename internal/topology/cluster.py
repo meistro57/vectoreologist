@@ -7,7 +7,7 @@ Input JSON:
   {
     "vectors":  [[float, ...], ...],
     "metadata": [{"id": "123", "source": "...", "layer": "...", "run_id": "..."}, ...],
-    "params":   {"n_neighbors": 15, "min_dist": 0.1}
+    "params":   {"n_neighbors": 15, "min_dist": 0.1, "min_cluster_size": 5, "min_samples": 3}
   }
 
 Output JSON:
@@ -58,37 +58,47 @@ def main():
 
     n_neighbors      = int(params.get("n_neighbors", 15))
     min_dist         = float(params.get("min_dist", 0.1))
+    min_cluster_size = int(params.get("min_cluster_size", 5))
+    min_samples      = int(params.get("min_samples", 3))
 
-    # For high-dimensional vectors (>1000 dims), use more components and
-    # a smaller min_cluster_size to avoid collapsing into too few clusters.
     n_dims = vectors.shape[1] if len(vectors.shape) > 1 else 1
-    if n_dims > 1000:
-        n_components     = 10   # more structure preserved from 3072-dim space
-        min_cluster_size = max(2, len(vectors) // 200)  # smaller = more clusters
-        n_neighbors      = max(n_neighbors, 30)  # wider neighborhood for dense space
-    else:
-        n_components     = 2
-        min_cluster_size = max(2, len(vectors) // 100)
+
+    # PCA pre-reduction: shrink high-dimensional vectors before UMAP to avoid
+    # OOM in the nearest-neighbour graph. 50 components retain most structure
+    # while cutting the per-point footprint by >30× for typical LLM embeddings.
+    pca_target = 50
+    if n_dims > pca_target and n_samples > pca_target:
+        from sklearn.decomposition import PCA
+        vectors = PCA(n_components=pca_target, random_state=42).fit_transform(vectors).astype(np.float32)
+        n_dims = pca_target
+
+    n_components = 2
 
     # Clamp UMAP n_neighbors: must be < n_samples.
-    n_neighbors = min(n_neighbors, n_samples - 1)
+    n_neighbors = max(2, min(n_neighbors, n_samples - 1))
 
-    # Clamp HDBSCAN min_cluster_size: min_samples (defaults to min_cluster_size)
-    # must be <= n_samples, otherwise the internal KD-tree query fails.
-    min_cluster_size = min(min_cluster_size, n_samples)
+    # Keep HDBSCAN params valid for small datasets.
+    min_cluster_size = max(2, min(min_cluster_size, n_samples))
+    min_samples = max(1, min(min_samples, min_cluster_size))
 
-    # UMAP: reduce to 2D for clustering
+    # low_memory=True uses an alternative NN algorithm that avoids materialising
+    # the full distance matrix, preventing OOM on large inputs.
     reducer   = umap.UMAP(
         n_neighbors=n_neighbors,
         min_dist=min_dist,
         n_components=n_components,
         random_state=42,
+        low_memory=True,
         verbose=False,
     )
     embedding = reducer.fit_transform(vectors)
 
     # HDBSCAN: density-based clustering on the 2D embedding
-    clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, prediction_data=True)
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        prediction_data=True,
+    )
     labels    = clusterer.fit_predict(embedding)
 
     unique_labels = sorted(set(labels) - {-1})

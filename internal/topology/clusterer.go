@@ -3,12 +3,14 @@ package topology
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 
 	"github.com/meistro57/vectoreologist/internal/models"
 )
@@ -16,15 +18,30 @@ import (
 //go:embed cluster.py
 var clusterScript []byte
 
+const maxTopologyVectors = 8000
+
 type Topology struct {
-	neighbors int
-	minDist   float64
+	neighbors      int
+	minDist        float64
+	minClusterSize int
+	minSamples     int
 }
 
 func New() *Topology {
 	return &Topology{
-		neighbors: 15,
-		minDist:   0.1,
+		neighbors:      15,
+		minDist:        0.1,
+		minClusterSize: 5,
+		minSamples:     3,
+	}
+}
+
+func (t *Topology) SetHDBSCANParams(minClusterSize, minSamples int) {
+	if minClusterSize > 0 {
+		t.minClusterSize = minClusterSize
+	}
+	if minSamples > 0 {
+		t.minSamples = minSamples
 	}
 }
 
@@ -54,6 +71,20 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 		return nil
 	}
 
+	clusteringVectors := vectors
+	clusteringMetadata := metadata
+	if len(vectors) > maxTopologyVectors {
+		perm := rand.New(rand.NewSource(42)).Perm(len(vectors))
+		sel := perm[:maxTopologyVectors]
+		clusteringVectors = make([][]float32, len(sel))
+		clusteringMetadata = make([]models.VectorMetadata, len(sel))
+		for i, idx := range sel {
+			clusteringVectors[i] = vectors[idx]
+			clusteringMetadata[i] = metadata[idx]
+		}
+		fmt.Fprintf(os.Stderr, "clustering: input too large (%d vectors), sampling %d vectors for topology analysis\n", len(vectors), maxTopologyVectors)
+	}
+
 	// Write the embedded Python script to a temp file.
 	scriptF, err := os.CreateTemp("", "vectoreologist-cluster-*.py")
 	if err != nil {
@@ -65,8 +96,8 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 	scriptF.Close()
 
 	// Build and write the JSON input.
-	metaMaps := make([]map[string]string, len(metadata))
-	for i, m := range metadata {
+	metaMaps := make([]map[string]string, len(clusteringMetadata))
+	for i, m := range clusteringMetadata {
 		metaMaps[i] = map[string]string{
 			"id":     fmt.Sprintf("%d", m.ID),
 			"source": m.Source,
@@ -75,11 +106,13 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 		}
 	}
 	input := clusterInput{
-		Vectors:  vectors,
+		Vectors:  clusteringVectors,
 		Metadata: metaMaps,
 		Params: map[string]any{
-			"n_neighbors": t.neighbors,
-			"min_dist":    t.minDist,
+			"n_neighbors":      t.neighbors,
+			"min_dist":         t.minDist,
+			"min_cluster_size": t.minClusterSize,
+			"min_samples":      t.minSamples,
 		},
 	}
 
@@ -100,6 +133,12 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ProcessState != nil && strings.Contains(exitErr.ProcessState.String(), "killed") {
+			fmt.Fprintln(os.Stderr, "clustering: python process was killed (likely out-of-memory)")
+			fmt.Fprintln(os.Stderr, "  Reduce --sample or rely on automatic topology downsampling")
+			return nil
+		}
 		fmt.Fprintf(os.Stderr, "clustering: python script failed: %v\n", err)
 		fmt.Fprintln(os.Stderr, "  Install deps: pip install umap-learn hdbscan numpy")
 		return nil

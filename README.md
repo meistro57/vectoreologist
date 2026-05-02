@@ -4,8 +4,39 @@
 > One who excavates meaning from the geometry of thought.
 
 [![CI](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml/badge.svg)](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml)
+[![Go 1.23+](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Vectoreologist analyzes embedding topology in Qdrant collections using UMAP + HDBSCAN, detects anomalies, runs DeepSeek reasoning over the topology, writes timestamped markdown + JSON reports, stores findings in Qdrant, and includes a terminal lens for interactive exploration.
+
+---
+
+## Pipeline
+
+```
+  Qdrant gRPC                                              findings/
+  collection                                              *.md  *.json
+      │                                                       ▲
+      ▼                                                       │
+ ┌──────────┐    ┌──────────────┐    ┌──────────┐    ┌──────────────┐
+ │ ⛏ PHASE 1 │───▶│  🗺 PHASE 2  │───▶│ 🔬 PHASE 3│───▶│  📋 PHASE 5  │
+ │ Excavate │    │  Topology   │    │ Anomalies│    │  Synthesis  │
+ └──────────┘    └──────────────┘    └──────────┘    └──────────────┘
+                       │                                     ▲
+                       │  PCA → UMAP → HDBSCAN               │
+                       │  clusters, bridges, moats           │
+                       ▼                                     │
+                 ┌──────────────┐                            │
+                 │  🧠 PHASE 4  │────────────────────────────┘
+                 │  Reasoning  │
+                 │ DeepSeek R1 │
+                 │  chain-of-  │
+                 │   thought   │
+                 └──────────────┘
+```
+
+`internal/topology/cluster.py` is compiled into the binary via `go:embed` and spawned at runtime. It applies PCA pre-reduction before UMAP to stay memory-safe on large, high-dimensional collections.
 
 ---
 
@@ -13,13 +44,13 @@ Vectoreologist analyzes embedding topology in Qdrant collections using UMAP + HD
 
 1. **Extracts vectors + metadata** from a Qdrant collection over gRPC
 2. **Samples vectors** with `random`, `stratified`, or `diverse` strategy
-3. **Maps topology** with embedded Python (`umap-learn` + `hdbscan`)
+3. **Maps topology** — PCA pre-reduction → UMAP → HDBSCAN (memory-efficient, no OOM on large collections)
 4. **Finds structures**: clusters, semantic bridges, and moats
 5. **Detects anomalies**: cluster anomalies, orphans, and source contradictions
-6. **Reasons with DeepSeek** (R1 by default, chat model optional)
+6. **Reasons with DeepSeek** (R1 by default; chain-of-thought logged live)
 7. **Synthesizes outputs** to `findings/vectoreology_<timestamp>.md` and `.json`
 8. **Stores findings** in Qdrant collection `vectoreology_findings`
-9. **Supports incremental runs** by stamping processed points and skipping stamped points on later runs
+9. **Supports incremental runs** by stamping processed points and skipping them on later runs
 10. **Supports watch mode** for repeated excavation on a schedule
 
 ---
@@ -28,17 +59,15 @@ Vectoreologist analyzes embedding topology in Qdrant collections using UMAP + HD
 
 ```
 vectoreologist (Go CLI)
-  ├─ Phase 1: Excavation (Qdrant gRPC scroll, batched)
-  ├─ Phase 2: Topology (embedded cluster.py: UMAP + HDBSCAN)
-  ├─ Phase 3: Anomaly detection
-  ├─ Phase 4: DeepSeek reasoning
-  └─ Phase 5: Synthesis (Markdown + JSON + Qdrant findings upsert)
+  ├─ Phase 1: Excavation      Qdrant gRPC scroll, batched
+  ├─ Phase 2: Topology        embedded cluster.py — PCA → UMAP → HDBSCAN
+  ├─ Phase 3: Anomaly         low coherence, density outliers, orphans, contradictions
+  ├─ Phase 4: Reasoning       DeepSeek R1 / chat — visible chain-of-thought
+  └─ Phase 5: Synthesis       Markdown + JSON + Qdrant findings upsert
 
 vectoreologist-lens (Bubble Tea TUI)
   └─ Explore JSON reports: clusters, bridges, anomalies, search, export
 ```
-
-`internal/topology/cluster.py` is embedded into the binary and executed at runtime via `python3`.
 
 ---
 
@@ -51,11 +80,13 @@ vectoreologist-lens (Bubble Tea TUI)
 | umap-learn | latest | Dimensionality reduction |
 | hdbscan | latest | Clustering |
 | numpy | latest | Numeric ops |
+| scikit-learn | latest | PCA pre-reduction (installed with umap-learn) |
 | Qdrant | running instance | Vector source + findings storage |
 | DeepSeek API key | optional | Reasoning + semantic labels |
 
 ```bash
 pip install umap-learn hdbscan numpy
+# scikit-learn is pulled in automatically as a umap-learn dependency
 ```
 
 ---
@@ -84,7 +115,7 @@ DEEPSEEK_API_KEY=your_key_here
 QDRANT_URL=http://localhost:6333
 ```
 
-If no DeepSeek key is provided, topology/anomaly phases still run and reasoning is skipped.
+If no DeepSeek key is provided, topology and anomaly phases still run and reasoning is skipped.
 
 ---
 
@@ -155,6 +186,20 @@ Each run emits:
 - JSON report: `findings/vectoreology_<timestamp>.json`
 - Qdrant findings upsert to collection `vectoreology_findings`
 - Point stamping payload `vectoreology_last_run=<RFC3339>` on processed source points
+
+---
+
+## Memory & scale
+
+The topology phase is the most resource-intensive step. The pipeline uses three layers of protection against OOM kills:
+
+| Guard | What it does |
+|---|---|
+| **Go-side cap** | Downsamples to 8,000 vectors before passing anything to Python |
+| **PCA pre-reduction** | Shrinks vectors to 50 dimensions before UMAP — cuts NN-graph memory ~30× for typical LLM embeddings (1536 → 50 dims) |
+| **`low_memory=True`** | Switches UMAP to an algorithm that avoids materialising the full distance matrix |
+
+For very large collections use `--sample` to control the extraction size and `--sample-strategy diverse` to ensure the sample covers the full vector space.
 
 ---
 

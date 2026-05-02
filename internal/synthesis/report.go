@@ -106,9 +106,71 @@ func (s *Synthesizer) GenerateReport(
 	return reportPath
 }
 
+func buildClusterMemberPointIDs(clusters []models.Cluster) map[int][]string {
+	clusterMemberPointIDs := make(map[int][]string, len(clusters))
+	for _, cluster := range clusters {
+		memberPointIDs := make([]string, len(cluster.VectorIDs))
+		for i, vectorID := range cluster.VectorIDs {
+			memberPointIDs[i] = fmt.Sprintf("%d", vectorID)
+		}
+		clusterMemberPointIDs[cluster.ID] = memberPointIDs
+	}
+	return clusterMemberPointIDs
+}
+
+func parseClusterIDsFromSubject(findingType, subject string) []int {
+	if findingType == "cluster_analysis" {
+		var clusterID int
+		if _, err := fmt.Sscanf(subject, "Cluster %d:", &clusterID); err == nil {
+			return []int{clusterID}
+		}
+	}
+	if findingType == "bridge_analysis" {
+		var clusterA, clusterB int
+		if _, err := fmt.Sscanf(subject, "Bridge: %d ↔ %d", &clusterA, &clusterB); err == nil {
+			return []int{clusterA, clusterB}
+		}
+	}
+	return nil
+}
+
+func memberPointIDsForFinding(f models.Finding, clusterMemberPointIDs map[int][]string) ([]string, bool) {
+	switch f.Type {
+	case "cluster_analysis", "bridge_analysis", "density_anomaly", "coherence_anomaly":
+	default:
+		return nil, false
+	}
+
+	clusterIDs := f.Clusters
+	if len(clusterIDs) == 0 {
+		clusterIDs = parseClusterIDsFromSubject(f.Type, f.Subject)
+	}
+
+	seen := make(map[string]bool)
+	memberPointIDs := make([]string, 0)
+	for _, clusterID := range clusterIDs {
+		for _, memberPointID := range clusterMemberPointIDs[clusterID] {
+			if !seen[memberPointID] {
+				seen[memberPointID] = true
+				memberPointIDs = append(memberPointIDs, memberPointID)
+			}
+		}
+	}
+
+	return memberPointIDs, true
+}
+
+func stringsToAny(values []string) []any {
+	converted := make([]any, len(values))
+	for i, value := range values {
+		converted[i] = value
+	}
+	return converted
+}
+
 // StoreFindings writes findings back to Qdrant.
 // Uses a 1-dimensional confidence vector; payload holds all finding fields.
-func (s *Synthesizer) StoreFindings(findings []models.Finding) error {
+func (s *Synthesizer) StoreFindings(findings []models.Finding, clusters []models.Cluster) error {
 	if len(findings) == 0 {
 		return nil
 	}
@@ -131,6 +193,7 @@ func (s *Synthesizer) StoreFindings(findings []models.Finding) error {
 		}
 	}
 
+	clusterMemberPointIDs := buildClusterMemberPointIDs(clusters)
 	base := uint64(time.Now().UnixMilli())
 	points := make([]*qdrant.PointStruct, 0, len(findings))
 	for i, f := range findings {
@@ -138,18 +201,24 @@ func (s *Synthesizer) StoreFindings(findings []models.Finding) error {
 		for j, c := range f.Clusters {
 			clusterStrs[j] = fmt.Sprintf("%d", c)
 		}
+
+		payload := map[string]any{
+			"type":            f.Type,
+			"subject":         f.Subject,
+			"reasoning_chain": f.ReasoningChain,
+			"confidence":      f.Confidence,
+			"is_anomaly":      f.IsAnomaly,
+			"clusters":        strings.Join(clusterStrs, ","),
+			"stored_at":       time.Now().Format(time.RFC3339),
+		}
+		if memberPointIDs, include := memberPointIDsForFinding(f, clusterMemberPointIDs); include {
+			payload["member_point_ids"] = stringsToAny(memberPointIDs)
+		}
+
 		points = append(points, &qdrant.PointStruct{
 			Id:      qdrant.NewIDNum(base + uint64(i)),
 			Vectors: qdrant.NewVectors(float32(f.Confidence)),
-			Payload: map[string]*qdrant.Value{
-				"type":            qdrant.NewValueString(f.Type),
-				"subject":         qdrant.NewValueString(f.Subject),
-				"reasoning_chain": qdrant.NewValueString(f.ReasoningChain),
-				"confidence":      qdrant.NewValueDouble(f.Confidence),
-				"is_anomaly":      qdrant.NewValueBool(f.IsAnomaly),
-				"clusters":        qdrant.NewValueString(strings.Join(clusterStrs, ",")),
-				"stored_at":       qdrant.NewValueString(time.Now().Format(time.RFC3339)),
-			},
+			Payload: qdrant.NewValueMap(payload),
 		})
 	}
 

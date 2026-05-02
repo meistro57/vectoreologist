@@ -9,6 +9,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+- **Topology phase OOM kill eliminated** — Phase 2 no longer gets killed on large or
+  high-dimensional collections. Three-layer fix:
+  1. Go-side hard cap lowered from 20,000 → 8,000 vectors so the Python process sees a
+     more conservative input by default.
+  2. `cluster.py` now applies PCA pre-reduction (scikit-learn, already a transitive
+     umap-learn dependency) to shrink vectors to 50 dimensions before UMAP runs. For
+     typical LLM embeddings (1536 dims) this cuts the nearest-neighbour graph memory
+     ~30× — the dominant OOM source.
+  3. UMAP is now constructed with `low_memory=True`, switching it to an algorithm that
+     avoids materialising the full distance matrix.
+
 ### Added
 - **Semantic cluster labels from R1 conclusions** — after DeepSeek R1 reasoning, the first
   sentence of each cluster's `**Conclusion:**` is parsed, stripped of markdown, and promoted

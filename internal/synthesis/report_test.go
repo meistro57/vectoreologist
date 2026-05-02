@@ -263,7 +263,64 @@ func TestStoreFindings_RequiresQdrant(t *testing.T) {
 
 func TestStoreFindings_EmptySlice(t *testing.T) {
 	s := newTestSynthesizer(t.TempDir())
-	if err := s.StoreFindings(nil); err != nil {
+	if err := s.StoreFindings(nil, nil); err != nil {
 		t.Errorf("StoreFindings with nil should return nil, got: %v", err)
+	}
+}
+
+func TestMemberPointIDsForFinding_ClusterAnalysis(t *testing.T) {
+	clusterMemberPointIDs := buildClusterMemberPointIDs([]models.Cluster{
+		{ID: 1, VectorIDs: []uint64{101, 102, 103}},
+	})
+
+	memberPointIDs, include := memberPointIDsForFinding(models.Finding{
+		Type:     "cluster_analysis",
+		Clusters: []int{1},
+	}, clusterMemberPointIDs)
+	if !include {
+		t.Fatal("expected member_point_ids to be included for cluster_analysis")
+	}
+	want := []string{"101", "102", "103"}
+	if strings.Join(memberPointIDs, ",") != strings.Join(want, ",") {
+		t.Fatalf("member_point_ids = %v, want %v", memberPointIDs, want)
+	}
+}
+
+func TestMemberPointIDsForFinding_BridgeAnalysisUnion(t *testing.T) {
+	clusterMemberPointIDs := buildClusterMemberPointIDs([]models.Cluster{
+		{ID: 1, VectorIDs: []uint64{101, 102}},
+		{ID: 2, VectorIDs: []uint64{102, 201}},
+	})
+
+	memberPointIDs, include := memberPointIDsForFinding(models.Finding{
+		Type:     "bridge_analysis",
+		Clusters: []int{1, 2},
+	}, clusterMemberPointIDs)
+	if !include {
+		t.Fatal("expected member_point_ids to be included for bridge_analysis")
+	}
+	want := []string{"101", "102", "201"}
+	if strings.Join(memberPointIDs, ",") != strings.Join(want, ",") {
+		t.Fatalf("member_point_ids = %v, want %v", memberPointIDs, want)
+	}
+}
+
+func TestMemberPointIDsForFinding_DensityAndCoherenceAnomalies(t *testing.T) {
+	clusterMemberPointIDs := buildClusterMemberPointIDs([]models.Cluster{
+		{ID: 7, VectorIDs: []uint64{7001, 7002}},
+	})
+
+	for _, findingType := range []string{"density_anomaly", "coherence_anomaly"} {
+		memberPointIDs, include := memberPointIDsForFinding(models.Finding{
+			Type:     findingType,
+			Clusters: []int{7},
+		}, clusterMemberPointIDs)
+		if !include {
+			t.Fatalf("expected member_point_ids to be included for %s", findingType)
+		}
+		want := []string{"7001", "7002"}
+		if strings.Join(memberPointIDs, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s member_point_ids = %v, want %v", findingType, memberPointIDs, want)
+		}
 	}
 }

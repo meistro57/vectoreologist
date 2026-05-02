@@ -325,6 +325,30 @@ func TestNew_DefaultParams(t *testing.T) {
 	if top.minDist != 0.1 {
 		t.Errorf("minDist: want 0.1, got %v", top.minDist)
 	}
+	if top.minClusterSize != 5 {
+		t.Errorf("minClusterSize: want 5, got %d", top.minClusterSize)
+	}
+	if top.minSamples != 3 {
+		t.Errorf("minSamples: want 3, got %d", top.minSamples)
+	}
+}
+
+func TestSetHDBSCANParams(t *testing.T) {
+	top := New()
+	top.SetHDBSCANParams(8, 4)
+	if top.minClusterSize != 8 {
+		t.Errorf("minClusterSize: want 8, got %d", top.minClusterSize)
+	}
+	if top.minSamples != 4 {
+		t.Errorf("minSamples: want 4, got %d", top.minSamples)
+	}
+	top.SetHDBSCANParams(0, -1)
+	if top.minClusterSize != 8 {
+		t.Errorf("minClusterSize should remain 8, got %d", top.minClusterSize)
+	}
+	if top.minSamples != 4 {
+		t.Errorf("minSamples should remain 4, got %d", top.minSamples)
+	}
 }
 
 // ---- AnalyzeClusters --------------------------------------------------------
@@ -446,6 +470,39 @@ func TestAnalyzeClusters_WithFakePython(t *testing.T) {
 	}
 	if clusters[0].Coherence != 0.8 {
 		t.Errorf("coherence: want 0.8, got %v", clusters[0].Coherence)
+	}
+}
+
+func TestAnalyzeClusters_DownsamplesLargeInput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake python script injection not supported on Windows")
+	}
+
+	fakeDir := t.TempDir()
+	fakePy := filepath.Join(fakeDir, "python3")
+	script := "#!/bin/sh\ncount=$(grep -o '\"id\"' \"$2\" | wc -l | tr -d ' ')\nprintf '{\"clusters\":[{\"id\":1,\"label\":\"sampled\",\"vector_ids\":[1],\"centroid\":[0,0],\"density\":1,\"size\":%s,\"coherence\":1}],\"noise_count\":0,\"total_vectors\":%s}\\n' \"$count\" \"$count\"\n"
+	if err := os.WriteFile(fakePy, []byte(script), 0755); err != nil {
+		t.Fatalf("could not write fake python3: %v", err)
+	}
+
+	origPath := os.Getenv("PATH")
+	os.Setenv("PATH", fakeDir+string(os.PathListSeparator)+origPath)
+	defer os.Setenv("PATH", origPath)
+
+	top := New()
+	vecs := make([][]float32, maxTopologyVectors+123)
+	meta := make([]models.VectorMetadata, maxTopologyVectors+123)
+	for i := range vecs {
+		vecs[i] = []float32{float32(i), 0}
+		meta[i] = models.VectorMetadata{ID: uint64(i + 1)}
+	}
+
+	clusters := top.AnalyzeClusters(vecs, meta)
+	if len(clusters) != 1 {
+		t.Fatalf("want 1 cluster from fake python, got %d", len(clusters))
+	}
+	if clusters[0].Size != maxTopologyVectors {
+		t.Fatalf("cluster size: want %d sampled vectors, got %d", maxTopologyVectors, clusters[0].Size)
 	}
 }
 
