@@ -1,9 +1,12 @@
 package anomaly
 
 import (
+	"fmt"
 	"math"
+	"strings"
 
 	"github.com/meistro57/vectoreologist/internal/models"
+	"github.com/meistro57/vectoreologist/internal/taxonomy"
 )
 
 type Detector struct {
@@ -130,6 +133,199 @@ func (d *Detector) DetectContradictions(
 	}
 
 	return contradictions
+}
+
+// DetectTaxonomyAnomalies runs all taxonomy-aware anomaly detectors in one pass.
+// Requires clusters to already have Taxonomy set by taxonomy.Classifier.
+func (d *Detector) DetectTaxonomyAnomalies(clusters []models.Cluster, metadata []models.VectorMetadata) []models.Finding {
+	var out []models.Finding
+	out = append(out, d.DetectLabelMismatches(clusters)...)
+	out = append(out, d.DetectSourceOversampling(clusters, metadata)...)
+	out = append(out, d.DetectSummaryArtifacts(clusters)...)
+	out = append(out, d.DetectEmbeddingBias(clusters, metadata)...)
+	return out
+}
+
+// DetectLabelMismatches flags clusters where the taxonomy classifier's LabelWarning is set,
+// indicating the cluster label does not match the actual content.
+func (d *Detector) DetectLabelMismatches(clusters []models.Cluster) []models.Finding {
+	var out []models.Finding
+	for _, c := range clusters {
+		if c.Taxonomy == nil || c.Taxonomy.LabelWarning == "" {
+			continue
+		}
+		out = append(out, models.Finding{
+			Type:        taxonomy.AnomalyLabelMismatch,
+			Subject:     c.Label,
+			IsAnomaly:   true,
+			Clusters:    []int{c.ID},
+			AnomalyType: taxonomy.AnomalyLabelMismatch,
+			Evidence:    c.Taxonomy.LabelWarning,
+			PossibleCauses: []string{
+				"source metadata assigned to wrong collection",
+				"content repurposed from unrelated document",
+				"embedding model conflated semantically distant concepts",
+			},
+			RequiresReview: true,
+			ReasoningChain: fmt.Sprintf(
+				"Cluster label '%s' conflicts with classified content (topic=%s, mode=%s): %s",
+				c.Label, c.Taxonomy.Topic, c.Taxonomy.Mode, c.Taxonomy.LabelWarning,
+			),
+		})
+	}
+	return out
+}
+
+// DetectSourceOversampling flags clusters where a single source contributes more
+// than 70 % of the member vectors, suggesting over-representation.
+func (d *Detector) DetectSourceOversampling(clusters []models.Cluster, metadata []models.VectorMetadata) []models.Finding {
+	byID := make(map[uint64]string, len(metadata))
+	for _, m := range metadata {
+		byID[m.ID] = m.Source
+	}
+
+	var out []models.Finding
+	for _, c := range clusters {
+		if len(c.VectorIDs) == 0 {
+			continue
+		}
+		counts := make(map[string]int)
+		for _, id := range c.VectorIDs {
+			src := byID[id]
+			if src == "" {
+				src = "unknown"
+			}
+			counts[src]++
+		}
+		top, topN := "", 0
+		for src, n := range counts {
+			if n > topN {
+				top, topN = src, n
+			}
+		}
+		ratio := float64(topN) / float64(len(c.VectorIDs))
+		if ratio > 0.70 && len(counts) > 1 {
+			out = append(out, models.Finding{
+				Type:        taxonomy.AnomalySourceOversampling,
+				Subject:     c.Label,
+				IsAnomaly:   true,
+				Clusters:    []int{c.ID},
+				AnomalyType: taxonomy.AnomalySourceOversampling,
+				Evidence:    fmt.Sprintf("source '%s' contributes %.0f%% of %d vectors", top, ratio*100, len(c.VectorIDs)),
+				PossibleCauses: []string{
+					"unbalanced dataset extraction",
+					"source dominates collection",
+					"sampling strategy did not diversify across sources",
+				},
+				RequiresReview: ratio > 0.90,
+				ReasoningChain: fmt.Sprintf(
+					"Source oversampling: '%s' accounts for %.0f%% of cluster '%s'. Other sources present: %d.",
+					top, ratio*100, c.Label, len(counts)-1,
+				),
+			})
+		}
+	}
+	return out
+}
+
+// DetectSummaryArtifacts flags clusters whose taxonomy mode is meta_descriptive_summary
+// but whose label indicates a specific content domain — suggesting the cluster contains
+// document scaffolding rather than primary content.
+func (d *Detector) DetectSummaryArtifacts(clusters []models.Cluster) []models.Finding {
+	var out []models.Finding
+	for _, c := range clusters {
+		if c.Taxonomy == nil || c.Taxonomy.Mode != taxonomy.ModeMetaDescriptiveSummary {
+			continue
+		}
+		// Flag when a specific (non-generic) topic is attached to a summary cluster.
+		topic := c.Taxonomy.Topic
+		if topic == "" || topic == "general" {
+			continue
+		}
+		// Only flag if the label references the topic (content looks like a summary of that topic).
+		lower := strings.ToLower(c.Label)
+		if !strings.Contains(lower, strings.Split(topic, "_")[0]) {
+			continue
+		}
+		out = append(out, models.Finding{
+			Type:        taxonomy.AnomalySummaryTemplateArtifact,
+			Subject:     c.Label,
+			IsAnomaly:   true,
+			Clusters:    []int{c.ID},
+			AnomalyType: taxonomy.AnomalySummaryTemplateArtifact,
+			Evidence: fmt.Sprintf(
+				"mode=meta_descriptive_summary with topic='%s' suggests document scaffold, not primary content",
+				topic,
+			),
+			PossibleCauses: []string{
+				"introductory or index sections were embedded as content",
+				"table-of-contents or chapter summaries included in extraction",
+				"template text repeated across source documents",
+			},
+			RequiresReview: true,
+			ReasoningChain: fmt.Sprintf(
+				"Cluster '%s' contains summary/overview text about topic '%s'. "+
+					"This may be structural document scaffolding rather than primary knowledge.",
+				c.Label, topic,
+			),
+		})
+	}
+	return out
+}
+
+// DetectEmbeddingBias flags clusters that combine extremely high density with
+// single-source dominance — a pattern consistent with near-duplicate embeddings
+// from one source, possibly indicating model bias or content repetition.
+func (d *Detector) DetectEmbeddingBias(clusters []models.Cluster, metadata []models.VectorMetadata) []models.Finding {
+	byID := make(map[uint64]string, len(metadata))
+	for _, m := range metadata {
+		byID[m.ID] = m.Source
+	}
+
+	var out []models.Finding
+	for _, c := range clusters {
+		if c.Density <= 0.95 || len(c.VectorIDs) == 0 {
+			continue
+		}
+		counts := make(map[string]int)
+		for _, id := range c.VectorIDs {
+			src := byID[id]
+			if src == "" {
+				src = "unknown"
+			}
+			counts[src]++
+		}
+		if len(counts) != 1 {
+			continue // bias signal only when there is exactly one source
+		}
+		var onlySource string
+		for src := range counts {
+			onlySource = src
+		}
+		out = append(out, models.Finding{
+			Type:        taxonomy.AnomalyEmbeddingBiasSuspected,
+			Subject:     c.Label,
+			IsAnomaly:   true,
+			Clusters:    []int{c.ID},
+			AnomalyType: taxonomy.AnomalyEmbeddingBiasSuspected,
+			Evidence: fmt.Sprintf(
+				"density=%.2f, all %d vectors from single source '%s'",
+				c.Density, len(c.VectorIDs), onlySource,
+			),
+			PossibleCauses: []string{
+				"near-duplicate content from one source embedded repeatedly",
+				"embedding model collapses semantically similar text from this source",
+				"extraction pulled too many similar chunks from the same document",
+			},
+			RequiresReview: true,
+			ReasoningChain: fmt.Sprintf(
+				"Cluster '%s' has density %.2f (>0.95) and all vectors come from '%s'. "+
+					"High density + single source strongly suggests near-duplicate embeddings.",
+				c.Label, c.Density, onlySource,
+			),
+		})
+	}
+	return out
 }
 
 // ScoreAnomaly calculates anomaly weight (higher = more interesting)

@@ -73,9 +73,28 @@ func (s *Synthesizer) GenerateReport(
 	sb.WriteString(fmt.Sprintf("- **Moats:** %d\n\n", len(moats)))
 
 	sb.WriteString("## Cluster Analysis\n\n")
+	// Build a quick lookup so we can annotate each cluster with its taxonomy.
+	clusterByID := make(map[int]models.Cluster, len(clusters))
+	for _, c := range clusters {
+		clusterByID[c.ID] = c
+	}
 	for _, finding := range findings {
 		if finding.Type == "cluster_analysis" {
 			sb.WriteString(fmt.Sprintf("### %s\n\n", finding.Subject))
+			// Emit taxonomy block if available.
+			var cid int
+			fmt.Sscanf(finding.Subject, "Cluster %d", &cid)
+			if cl, ok := clusterByID[cid]; ok && cl.Taxonomy != nil {
+				t := cl.Taxonomy
+				sb.WriteString(fmt.Sprintf(
+					"**Taxonomy** — topic: `%s` | mode: `%s` | posture: `%s` | confidence: %.2f",
+					t.Topic, t.Mode, t.EpistemicPosture, t.Confidence,
+				))
+				if t.LabelWarning != "" {
+					sb.WriteString(fmt.Sprintf(" | ⚠ %s", t.LabelWarning))
+				}
+				sb.WriteString("\n\n")
+			}
 			sb.WriteString(fmt.Sprintf("%s\n\n", finding.ReasoningChain))
 		}
 	}
@@ -98,11 +117,24 @@ func (s *Synthesizer) GenerateReport(
 
 	sb.WriteString("## Anomaly Findings\n\n")
 	for _, finding := range findings {
-		switch finding.Type {
-		case "coherence_anomaly", "density_anomaly", "orphan_cluster", "source_contradiction":
-			sb.WriteString(fmt.Sprintf("### %s (%s)\n\n", finding.Subject, finding.Type))
-			sb.WriteString(fmt.Sprintf("%s\n\n", finding.ReasoningChain))
+		if !finding.IsAnomaly {
+			continue
 		}
+		sb.WriteString(fmt.Sprintf("### %s (%s)\n\n", finding.Subject, finding.Type))
+		if finding.Evidence != "" {
+			sb.WriteString(fmt.Sprintf("**Evidence:** %s\n\n", finding.Evidence))
+		}
+		if len(finding.PossibleCauses) > 0 {
+			sb.WriteString("**Possible causes:**\n")
+			for _, c := range finding.PossibleCauses {
+				sb.WriteString(fmt.Sprintf("- %s\n", c))
+			}
+			sb.WriteString("\n")
+		}
+		if finding.RequiresReview {
+			sb.WriteString("**⚠ Requires human review**\n\n")
+		}
+		sb.WriteString(fmt.Sprintf("%s\n\n", finding.ReasoningChain))
 	}
 
 	os.WriteFile(reportPath, []byte(sb.String()), 0644)

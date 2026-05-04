@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/meistro57/vectoreologist/internal/models"
 	"github.com/meistro57/vectoreologist/internal/reasoner"
 	"github.com/meistro57/vectoreologist/internal/synthesis"
+	"github.com/meistro57/vectoreologist/internal/taxonomy"
 	"github.com/meistro57/vectoreologist/internal/topology"
 	"github.com/meistro57/vectoreologist/internal/workspace"
 )
@@ -44,6 +46,13 @@ type config struct {
 	minSamples     int // no-op; kept for backwards CLI compatibility
 	redisURL       string
 	epsilon        float64
+	// Query flags — when any is set, the pipeline does not run; instead a JSON
+	// report file is read and filtered results are printed.
+	queryReport   string
+	queryTopic    string
+	queryMode     string
+	queryPosture  string
+	queryMismatch bool
 }
 
 // loadDotEnv reads a .env file and sets any variables not already in the environment.
@@ -253,7 +262,22 @@ func runOnce(cfg config) (string, error) {
 	} else {
 		fmt.Println("   ⚠ No DeepSeek API key — skipping reasoning phase")
 	}
-	allFindings := append(reasonedFindings, anomalies...)
+	// Phase 4.5: Taxonomy Classification
+	fmt.Println("🔖 Phase 4.5: Taxonomy Classification")
+	tClassifier := taxonomy.New()
+	clusters = tClassifier.ClassifyClusters(clusters, metadata)
+	taxonomyAnomalies := det.DetectTaxonomyAnomalies(clusters, metadata)
+	mismatchCount := 0
+	for _, f := range taxonomyAnomalies {
+		if f.AnomalyType == taxonomy.AnomalyLabelMismatch {
+			mismatchCount++
+		}
+	}
+	fmt.Printf("   ✓ Taxonomy classification complete (%d clusters)\n", len(clusters))
+	fmt.Printf("   ✓ %d label mismatches detected\n", mismatchCount)
+	fmt.Printf("   ✓ %d taxonomy anomalies total\n\n", len(taxonomyAnomalies))
+
+	allFindings := append(reasonedFindings, append(anomalies, taxonomyAnomalies...)...)
 	fmt.Printf("   ✓ Generated %d reasoning chains\n", len(reasonedFindings))
 	fmt.Printf("   ✓ Total findings: %d\n\n", len(allFindings))
 
@@ -296,6 +320,49 @@ func runOnce(cfg config) (string, error) {
 	return reportPath, nil
 }
 
+// runQuery reads a JSON report, applies taxonomy filters, and prints matching clusters.
+func runQuery(reportPath, topic, mode, posture string, mismatchOnly bool) {
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading report: %v\n", err)
+		os.Exit(1)
+	}
+	var report synthesis.JSONReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing report: %v\n", err)
+		os.Exit(1)
+	}
+
+	q := taxonomy.Query{
+		Topic:            topic,
+		Mode:             mode,
+		EpistemicPosture: posture,
+		LabelMismatch:    mismatchOnly,
+	}
+
+	var matched []synthesis.JSONCluster
+	for _, jc := range report.Clusters {
+		var cl models.Cluster
+		cl.ID = jc.ID
+		cl.Label = jc.Label
+		if jc.Taxonomy != nil {
+			cl.Taxonomy = &models.TaxonomyLabel{
+				Topic:            jc.Taxonomy.Topic,
+				Mode:             jc.Taxonomy.Mode,
+				EpistemicPosture: jc.Taxonomy.EpistemicPosture,
+				LabelWarning:     jc.Taxonomy.LabelWarning,
+			}
+		}
+		if q.MatchesCluster(cl) {
+			matched = append(matched, jc)
+		}
+	}
+
+	out, _ := json.MarshalIndent(matched, "", "  ")
+	fmt.Printf("%s\n", out)
+	fmt.Fprintf(os.Stderr, "Matched %d / %d clusters\n", len(matched), len(report.Clusters))
+}
+
 func main() {
 	loadDotEnv(".env")
 	showVersion := flag.Bool("version", false, "Print version and exit")
@@ -318,6 +385,11 @@ func main() {
 	minSamples := flag.Int("min-samples", 3, "(no-op; DBSCAN uses --min-cluster-size only)")
 	redisURL := flag.String("redis-url", "redis://localhost:6379", "Redis URL for vector workspace (e.g. redis://localhost:6379); empty = disabled")
 	epsilon := flag.Float64("epsilon", 0.3, "DBSCAN neighbourhood radius (cosine distance; 0.3 = 70% similarity threshold)")
+	queryReport := flag.String("query-report", "", "Path to a JSON report to query instead of running the pipeline")
+	queryTopic := flag.String("query-topic", "", "Filter clusters by topic (e.g. consciousness_philosophy)")
+	queryMode := flag.String("query-mode", "", "Filter clusters by mode (e.g. scholarly_annotation)")
+	queryPosture := flag.String("query-posture", "", "Filter clusters by epistemic posture (e.g. doctrinal_assertion)")
+	queryMismatch := flag.Bool("query-mismatch", false, "Filter to clusters where label and content disagree")
 	flag.Parse()
 
 	if *showVersion {
@@ -325,7 +397,16 @@ func main() {
 		return
 	}
 
-
+	// Query mode: read a JSON report and filter clusters by taxonomy.
+	if *queryReport != "" || *queryTopic != "" || *queryMode != "" || *queryPosture != "" || *queryMismatch {
+		reportPath := *queryReport
+		if reportPath == "" {
+			fmt.Fprintln(os.Stderr, "Error: --query-report is required when using --query-* flags")
+			os.Exit(1)
+		}
+		runQuery(reportPath, *queryTopic, *queryMode, *queryPosture, *queryMismatch)
+		return
+	}
 
 	if *sampleSize > 0 && *batchSize > *sampleSize {
 		*batchSize = *sampleSize
