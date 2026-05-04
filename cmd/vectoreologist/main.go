@@ -299,7 +299,7 @@ func runOnce(cfg config) (string, error) {
 func main() {
 	loadDotEnv(".env")
 	showVersion := flag.Bool("version", false, "Print version and exit")
-	collection := flag.String("collection", "", "Qdrant collection name (required)")
+	collection := flag.String("collection", "meta_reflections", "Qdrant collection name")
 	sampleSize := flag.Int("sample", 0, "Number of vectors to sample (0 = entire collection)")
 	batchSize := flag.Int("batch-size", 5000, "Vectors per batch during extraction")
 	strict := flag.Bool("strict", false, "Fail immediately if any batch errors (default: stop early and continue)")
@@ -316,7 +316,7 @@ func main() {
 	incremental := flag.Bool("incremental", false, "Only extract unstamped points (skip previously analyzed)")
 	minClusterSize := flag.Int("min-cluster-size", 5, "Minimum DBSCAN cluster size")
 	minSamples := flag.Int("min-samples", 3, "(no-op; DBSCAN uses --min-cluster-size only)")
-	redisURL := flag.String("redis-url", "", "Redis URL for vector workspace (e.g. redis://localhost:6379); empty = disabled")
+	redisURL := flag.String("redis-url", "redis://localhost:6379", "Redis URL for vector workspace (e.g. redis://localhost:6379); empty = disabled")
 	epsilon := flag.Float64("epsilon", 0.3, "DBSCAN neighbourhood radius (cosine distance; 0.3 = 70% similarity threshold)")
 	flag.Parse()
 
@@ -325,11 +325,7 @@ func main() {
 		return
 	}
 
-	if *collection == "" {
-		fmt.Fprintln(os.Stderr, "Error: --collection is required")
-		flag.Usage()
-		os.Exit(1)
-	}
+
 
 	if *sampleSize > 0 && *batchSize > *sampleSize {
 		*batchSize = *sampleSize

@@ -78,7 +78,7 @@ vectoreologist-lens (Bubble Tea TUI)
 | gonum.org/v1/gonum | v0.15.1 | PCA (EigenSym) + matrix ops |
 | Qdrant | running instance | Vector source + findings storage |
 | DeepSeek API key | optional | Reasoning + semantic labels |
-| Redis | optional | Streaming workspace for large collections — Docker recommended: `./scripts/start-redis.sh` |
+| Redis | default on `localhost:6379` | Streaming workspace — keeps Go heap at O(batch_size); Docker: `./scripts/start-redis.sh` |
 
 ---
 
@@ -113,7 +113,10 @@ If no DeepSeek key is provided, topology and anomaly phases still run and reason
 ## Usage
 
 ```bash
-# Full collection (sample=0 means all vectors)
+# Default run — uses meta_reflections, full collection, Redis at localhost:6379
+./vectoreologist
+
+# Different collection, full extraction
 ./vectoreologist --collection my_collection
 
 # Fixed sample size with diverse sampling
@@ -137,8 +140,8 @@ If no DeepSeek key is provided, topology and anomaly phases still run and reason
 # Combine all named vectors into a single averaged vector
 ./vectoreologist --collection my_collection --vector-combine
 
-# Large collection via Redis workspace (keeps Go heap low)
-./vectoreologist --collection my_large_collection --redis-url redis://localhost:6379
+# Disable Redis workspace
+./vectoreologist --collection my_collection --redis-url ""
 
 # Print version
 ./vectoreologist --version
@@ -150,7 +153,7 @@ Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-c
 
 | Flag | Default | Description |
 |---|---|---|
-| `--collection` | _(required)_ | Qdrant collection name |
+| `--collection` | `meta_reflections` | Qdrant collection name |
 | `--sample` | `0` | Number of vectors to sample (`0` = entire collection) |
 | `--batch-size` | `5000` | Vectors per batch during extraction |
 | `--strict` | `false` | Fail immediately if any extraction batch errors |
@@ -168,7 +171,7 @@ Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-c
 | `--min-cluster-size` | `5` | Minimum DBSCAN cluster size |
 | `--min-samples` | `3` | (no-op; DBSCAN uses `--min-cluster-size` only) |
 | `--epsilon` | `0.3` | DBSCAN neighbourhood radius (cosine distance) |
-| `--redis-url` | `""` | Redis URL for vector workspace; empty = disabled |
+| `--redis-url` | `redis://localhost:6379` | Redis URL for vector workspace; empty string disables it |
 | `--version` | — | Print version and exit |
 
 ---
@@ -189,7 +192,7 @@ Each run emits:
 
 Topology analysis is fully in-process — no Python subprocess, no OOM guards needed. The pipeline caps input at `MaxTopologyTotal = 20,000` vectors, then PCA reduces to 50 dimensions in-process before DBSCAN runs. Peak RAM for topology is approximately 120–150 MB.
 
-For very large collections, pass `--redis-url redis://localhost:6379` to enable the Redis workspace. Extraction then streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded into Go RAM for topology. Run `./scripts/start-redis.sh` to start a local Redis container.
+Redis workspace is enabled by default (`--redis-url redis://localhost:6379`). Extraction streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded into Go RAM for topology. Run `./scripts/start-redis.sh` to start a local Redis container. Pass `--redis-url ""` to disable if Redis is unavailable.
 
 Use `--sample` to limit extraction size and `--sample-strategy diverse` to maximise vector-space coverage.
 
@@ -231,8 +234,8 @@ make all                               # build CLI + lens
 make build                             # build CLI
 make lens                              # build lens
 make run                               # go run CLI
-make run-collection COLLECTION=my_col  # sample 5000 vectors from a collection
-make run-redis COLLECTION=my_col       # same via Redis workspace (low heap)
+make run-collection COLLECTION=my_col  # full collection via Redis workspace (low heap)
+make run-redis COLLECTION=my_col       # alias — same as run-collection
 make run-watch COLLECTION=my_col       # watch mode, reruns every 5m
 make redis-start                       # start Redis Docker container
 make redis-stop                        # stop Redis Docker container

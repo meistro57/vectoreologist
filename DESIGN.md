@@ -133,7 +133,7 @@ Use cluster labels to annotate raw vectors in the source collection.
 - **Memory**: 5000 vectors × 1536 dims × 4 bytes ≈ 30 MB; PCA covariance matrix is d×d (not n×d), bounded regardless of collection size
 - **Clustering**: DBSCAN with precomputed neighbour lists, parallel across all CPU cores; PCA via covariance matrix O(n·d²) — parallel, bounded by d×d not n×d
 - **Cap**: `MaxTopologyTotal = 20,000` — input is random-sampled before PCA runs
-- **Redis workspace**: optional `--redis-url` keeps Go heap at O(batch_size) during extraction; only `MaxTopologyTotal` vectors are loaded into RAM for topology
+- **Redis workspace**: enabled by default (`redis://localhost:6379`); keeps Go heap at O(batch_size) during extraction; only `MaxTopologyTotal` vectors are loaded into RAM for topology
 
 ## Dependencies
 
@@ -145,12 +145,11 @@ Use cluster labels to annotate raw vectors in the source collection.
 ## Example Workflow
 
 ```bash
-# Analyse any Qdrant collection
-./vectoreologist --collection my_collection --sample 5000
+# Default run — meta_reflections, full collection, Redis enabled
+./vectoreologist
 
-# Large collection — stream batches to Redis, keep Go heap low
-./scripts/start-redis.sh
-make run-redis COLLECTION=my_large_collection
+# Analyse a specific collection (Redis on by default)
+./vectoreologist --collection my_collection
 
 # Compare two collections
 ./vectoreologist --collection collection_a --output ./findings/a
@@ -159,6 +158,9 @@ diff findings/a/vectoreology_*.md findings/b/vectoreology_*.md
 
 # Watch mode — rerun every 10 minutes
 make run-watch COLLECTION=my_collection WATCH=10m
+
+# Disable Redis if unavailable
+./vectoreologist --collection my_collection --redis-url ""
 ```
 
 ## Output Example

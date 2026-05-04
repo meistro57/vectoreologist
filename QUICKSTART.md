@@ -14,11 +14,12 @@ docker ps | grep qdrant
 docker run -d -p 6333:6333 qdrant/qdrant
 ```
 
-**Redis (optional, for large collections)**
+**Redis (enabled by default at `localhost:6379`)**
 ```bash
 ./scripts/start-redis.sh
 # Pulls redis:7-alpine and starts the vectoreologist-redis container on port 6379.
 # Safe to re-run — starts an existing stopped container rather than recreating it.
+# Pass --redis-url "" to disable if Redis is unavailable.
 ```
 
 ---
@@ -52,16 +53,22 @@ No DeepSeek key? The tool still runs — Phase 4 reasoning is skipped and you st
 
 ## 4. First Excavation
 
-Replace `my_collection` with the name of your Qdrant collection:
+Run with no flags to excavate the default collection (`meta_reflections`, full extraction, Redis enabled):
 
 ```bash
-./vectoreologist --collection my_collection --sample 5000
+./vectoreologist
+```
+
+Or target a specific collection:
+
+```bash
+./vectoreologist --collection my_collection
 ```
 
 Or via make:
 
 ```bash
-make run-collection COLLECTION=my_collection SAMPLE=5000
+make run-collection COLLECTION=my_collection
 ```
 
 ---
@@ -155,12 +162,12 @@ diff findings/a/vectoreology_*.md findings/b/vectoreology_*.md
 ./vectoreologist --collection my_collection --vector-combine
 ```
 
-### Large collection with Redis workspace
+### Large collection (Redis is on by default)
 ```bash
-./scripts/start-redis.sh
-./vectoreologist --collection my_large_collection --redis-url redis://localhost:6379
+./scripts/start-redis.sh   # ensure Redis container is running
+./vectoreologist --collection my_large_collection
 # or via make:
-make run-redis COLLECTION=my_large_collection
+make run-collection COLLECTION=my_large_collection
 ```
 
 ### Watch mode
@@ -197,8 +204,11 @@ cat .env | grep DEEPSEEK_API_KEY
 ```
 
 ### "Redis connection refused"
+Redis is enabled by default. Either start the container or disable Redis:
 ```bash
 ./scripts/start-redis.sh
+# or to run without Redis:
+./vectoreologist --collection my_collection --redis-url ""
 ```
 
 ### Phase 4 hangs / times out

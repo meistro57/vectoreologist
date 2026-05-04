@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
 	"sort"
 	"time"
 
@@ -41,13 +42,27 @@ func New(redisURL, runID string, ttl time.Duration) (*Workspace, error) {
 	if err != nil {
 		return nil, fmt.Errorf("workspace: parse redis URL: %w", err)
 	}
-	client := redis.NewClient(opts)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("workspace: redis ping: %w", err)
+
+	addrs := redisAddrCandidates(opts.Addr)
+	var lastErr error
+	for _, addr := range addrs {
+		curOpts := *opts
+		curOpts.Addr = addr
+		client := redis.NewClient(&curOpts)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := client.Ping(ctx).Err()
+		cancel()
+		if err == nil {
+			return &Workspace{client: client, runID: runID, ttl: ttl}, nil
+		}
+		_ = client.Close()
+		lastErr = err
 	}
-	return &Workspace{client: client, runID: runID, ttl: ttl}, nil
+
+	if len(addrs) > 1 {
+		return nil, fmt.Errorf("workspace: redis ping failed for %v: %w", addrs, lastErr)
+	}
+	return nil, fmt.Errorf("workspace: redis ping: %w", lastErr)
 }
 
 // StoreBatch writes a batch of vectors and their metadata to Redis.
@@ -218,6 +233,21 @@ func (w *Workspace) Delete() error {
 
 func (w *Workspace) key(kind string, batchNum int) string {
 	return fmt.Sprintf("veo:%s:%s:%d", w.runID, kind, batchNum)
+}
+
+func redisAddrCandidates(addr string) []string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return []string{addr}
+	}
+	if port == "7379" && isLocalHost(host) {
+		return []string{addr, net.JoinHostPort(host, "6379")}
+	}
+	return []string{addr}
+}
+
+func isLocalHost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 func (w *Workspace) infoKey() string {

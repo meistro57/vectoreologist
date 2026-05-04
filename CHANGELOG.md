@@ -9,6 +9,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+- **`--collection` defaults to `meta_reflections`** — the flag is no longer required; running `./vectoreologist` with no arguments excavates `meta_reflections` at full collection size.
+- **`--redis-url` defaults to `redis://localhost:6379`** — Redis workspace is now enabled by default. Pass `--redis-url ""` to disable if Redis is unavailable.
+- **`make run-collection` always uses Redis** — the target now passes `--redis-url $(REDIS_URL)` automatically, keeping Go heap low on every standard run.
+
 ### Added
 - **Pure Go PCA + DBSCAN clustering** — topology analysis is now fully in-process; no Python subprocess, no `cluster.py`, no `umap-learn`/`hdbscan` dependency. `internal/topology/pca.go` implements PCA via the covariance-matrix approach (only a d×d float64 allocation — never n×d), and `internal/topology/dbscan.go` implements DBSCAN with parallel neighbour precomputation across all CPU cores. Default epsilon 0.3 (cosine distance ≈ 70% similarity threshold), configurable with `--epsilon`.
 - **Redis vector workspace** (`internal/workspace`) — optional `--redis-url` flag streams extracted vector batches to Redis using binary float32 encoding during extraction, keeping Go's heap at O(batch_size) instead of O(total_vectors). `LoadSample` draws a random subset for topology analysis, loading only the batches that contain sampled vectors. Keys are namespaced `veo:{runID}:*` and expire after 1 hour.
