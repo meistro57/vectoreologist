@@ -38,7 +38,7 @@ COLLECTION ?= my_collection
 SAMPLE     ?= 5000
 
 run-collection:
-	./vectoreologist --collection $(COLLECTION) --sample $(SAMPLE)
+	./vectoreologist --collection $(COLLECTION) --sample $(SAMPLE) --redis-url $(REDIS_URL)
 
 # ── Redis-backed runs (streaming extraction, lower Go heap) ──────────────────
 # Start Redis first: make redis-start

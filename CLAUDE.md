@@ -27,15 +27,21 @@ All tests run without external services (no Qdrant, no DeepSeek key needed).
 
 ```
 cmd/vectoreologist/main.go      CLI entry, flag wiring, .env loading, pipeline orchestration
-internal/models/models.go       Shared types: VectorMetadata, Cluster, Bridge, Moat, Finding
+internal/models/models.go       Shared types: VectorMetadata, Cluster, TaxonomyLabel, Bridge, Moat, Finding
 internal/excavator/qdrant.go    Qdrant gRPC client — Extract(collection, limit)
 internal/excavator/sampler.go   Sampling strategies: Random, Stratified, Diverse, Temporal
 internal/topology/clusterer.go  PCA+DBSCAN pipeline, SetClusterParams, FindBridges, FindMoats
 internal/topology/pca.go        pcaReduce(): parallel covariance-matrix PCA via gonum EigenSym
 internal/topology/dbscan.go     runDBSCAN(), buildNeighborLists(), unitCosineDistance(), l2Normalise()
-internal/anomaly/detector.go    DetectClusterAnomalies, DetectOrphans, DetectContradictions
+internal/anomaly/detector.go    DetectClusterAnomalies, DetectOrphans, DetectContradictions,
+                                DetectTaxonomyAnomalies (label mismatch, oversampling, summary artifact, embedding bias)
+internal/taxonomy/taxonomy.go   Mode/EpistemicPosture/AnomalyType constants; Classifier type
+internal/taxonomy/classifier.go Classify(fragments, label) → TaxonomyLabel; ClassifyClusters()
+internal/taxonomy/repair.go     CheckLabelMismatch() — detects topic/mode label conflicts
+internal/taxonomy/query.go      Query struct; FilterClusters(); MatchesCluster()
 internal/reasoner/deepseek.go   DeepSeek API client; extracts reasoning_content for R1
-internal/synthesis/report.go    GenerateReport (markdown), StoreFindings (Qdrant stub)
+internal/synthesis/report.go    GenerateReport (markdown + taxonomy badges), StoreFindings (Qdrant stub)
+internal/synthesis/json.go      JSONReport with JSONTaxonomy on clusters; structured JSONAnomaly fields
 internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors, Delete; binary float32 encoding
 ```
 
@@ -58,10 +64,10 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 - `MaxTopologyTotal = 20000` — input is random-sampled to this cap before PCA runs.
 
 ### Redis workspace
-- Optional: enabled only when `--redis-url` is non-empty.
+- Enabled by default (`--redis-url redis://localhost:6379`); pass `--redis-url ""` to disable.
 - Vectors are stored as binary float32 blobs; keys follow `veo:{runID}:{vec|meta|info}:{batchNum}`.
 - TTL is 1 hour on all keys; `Delete()` is called at run end for explicit early cleanup.
-- With Redis enabled, extraction streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded back into Go RAM for topology.
+- Extraction streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded back into Go RAM for topology.
 
 ### DeepSeek reasoning
 - Default model is `deepseek-reasoner` (R1). Each call can take up to 5 minutes — timeout is set accordingly.
@@ -97,9 +103,21 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 
 ---
 
+### Taxonomy classifier
+
+- `taxonomy.Classifier.Classify(fragments, existingLabel)` runs keyword scoring on up to 12 text fragments per cluster.
+- Three independent scoring passes: `modeSignals`, `postureSignals`, `topicDomains` — each produces a winner + confidence ratio.
+- Overall confidence = average of the three per-axis confidences.
+- A score below threshold (`1.0` for mode/posture, `2.0` for topic) falls back to `"unknown"` / `"general"`.
+- `CheckLabelMismatch` is called at the end of `Classify`; result is stored in `TaxonomyLabel.LabelWarning`.
+- `ClassifyClusters` runs after `PromoteClusterLabels` in Phase 4.5; returns a new slice, originals are not mutated.
+- `DetectTaxonomyAnomalies` delegates to four sub-detectors and is called immediately after `ClassifyClusters`.
+- `--query-*` flags short-circuit the pipeline; `runQuery` reads the JSON, converts `JSONTaxonomy` → `models.TaxonomyLabel`, and calls `taxonomy.Query.MatchesCluster`.
+
+---
+
 ## What's stubbed / incomplete
 
-- `synthesis.StoreFindings` — the Qdrant write path is a no-op stub (TODOs in place).
 - `topology.AnalyzeClusters` cluster labels come from dominant `layer/source` metadata of member vectors — not semantically meaningful yet.
 - `excavator.Sampler` strategies `Diverse` and `Temporal` fall back to random sampling.
 - No streaming for DeepSeek responses — full response is buffered before printing.

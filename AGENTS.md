@@ -59,10 +59,10 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 - `MaxTopologyTotal = 20000` — input is random-sampled to this cap before PCA runs.
 
 ### Redis workspace
-- Optional: enabled only when `--redis-url` is non-empty.
+- Enabled by default (`--redis-url redis://localhost:6379`); pass `--redis-url ""` to disable.
 - Vectors are stored as binary float32 blobs; keys follow `veo:{runID}:{vec|meta|info}:{batchNum}`.
 - TTL is 1 hour on all keys; `Delete()` is called at run end for explicit early cleanup.
-- With Redis enabled, extraction streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded back into Go RAM for topology.
+- Extraction streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded back into Go RAM for topology.
 
 ### DeepSeek reasoning
 - Default model is `deepseek-reasoner` (R1). Each call can take up to 5 minutes — timeout is set accordingly.
@@ -100,7 +100,6 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 
 ## What's stubbed / incomplete
 
-- `synthesis.StoreFindings` — the Qdrant write path is a no-op stub (TODOs in place).
 - `topology.AnalyzeClusters` cluster labels come from dominant `layer/source` metadata of member vectors — not semantically meaningful yet.
 - `excavator.Sampler` strategies `Diverse` and `Temporal` fall back to random sampling.
 - No streaming for DeepSeek responses — full response is buffered before printing.

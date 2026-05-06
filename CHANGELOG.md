@@ -10,6 +10,22 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased]
 
 ### Added
+- **Taxonomy classification system** (`internal/taxonomy`) — rule-based second-pass classifier assigns knowledge labels on 3 axes after clustering: `topic` (10 domains: consciousness_philosophy, quantum_mechanics, mathematics, …), `mode` (5 values: didactic_teaching, meta_descriptive_summary, scholarly_annotation, transformational_dialogue, functional_definition), and `epistemic_posture` (5 values: doctrinal_assertion, descriptive_abstract, externally_referenced, experiential_reframing, conditional_revelation). No additional LLM calls required — pure keyword/phrase scoring.
+- **Label repair** — `CheckLabelMismatch` detects when a cluster's source-based label contradicts the classifier's topic or mode and sets `TaxonomyLabel.LabelWarning`. Fixes classes of errors like `"other / quantum_mechanics"` labeling consciousness content.
+- **Structured anomaly types** — 4 new anomaly detectors: `DetectLabelMismatches` (topic/mode conflict), `DetectSourceOversampling` (single source >70% of cluster), `DetectSummaryArtifacts` (meta-summary mode on topic-specific cluster), `DetectEmbeddingBias` (density >0.95 + single source). Each finding carries `Evidence`, `PossibleCauses []string`, and `RequiresReview bool`.
+- **Taxonomy in JSON output** — each cluster in the JSON report now carries a `taxonomy` object with all 3 axis values, confidence, label warning, and source family. Fully backward-compatible (omitempty).
+- **Structured anomaly fields in JSON** — `JSONAnomaly` now includes `anomaly_type`, `evidence`, `possible_causes`, and `requires_review`.
+- **Query support** — `taxonomy.Query` struct + `FilterClusters()` for AND-combination filtering by topic, mode, posture, or label mismatch. Queries like "find all doctrinal assertions about consciousness" and "find clusters where label and content disagree" work out of the box.
+- **`--query-*` CLI flags** — `--query-report`, `--query-topic`, `--query-mode`, `--query-posture`, `--query-mismatch` read a JSON report and print filtered clusters as JSON. Pipeline does not run when query mode is active.
+- **Taxonomy in markdown reports** — cluster sections now include a `Taxonomy` inline badge showing topic, mode, posture, confidence, and any label warning.
+- **Phase 4.5** in the pipeline — taxonomy classification and taxonomy-aware anomaly detection runs after R1 label promotion, before report generation.
+
+### Changed
+- **`--collection` defaults to `meta_reflections`** — the flag is no longer required; running `./vectoreologist` with no arguments excavates `meta_reflections` at full collection size.
+- **`--redis-url` defaults to `redis://localhost:6379`** — Redis workspace is now enabled by default. Pass `--redis-url ""` to disable if Redis is unavailable.
+- **`make run-collection` always uses Redis** — the target now passes `--redis-url $(REDIS_URL)` automatically, keeping Go heap low on every standard run.
+
+### Added
 - **Pure Go PCA + DBSCAN clustering** — topology analysis is now fully in-process; no Python subprocess, no `cluster.py`, no `umap-learn`/`hdbscan` dependency. `internal/topology/pca.go` implements PCA via the covariance-matrix approach (only a d×d float64 allocation — never n×d), and `internal/topology/dbscan.go` implements DBSCAN with parallel neighbour precomputation across all CPU cores. Default epsilon 0.3 (cosine distance ≈ 70% similarity threshold), configurable with `--epsilon`.
 - **Redis vector workspace** (`internal/workspace`) — optional `--redis-url` flag streams extracted vector batches to Redis using binary float32 encoding during extraction, keeping Go's heap at O(batch_size) instead of O(total_vectors). `LoadSample` draws a random subset for topology analysis, loading only the batches that contain sampled vectors. Keys are namespaced `veo:{runID}:*` and expire after 1 hour.
 - **`scripts/start-redis.sh`** — installs and starts a `redis:7-alpine` Docker container (`vectoreologist-redis`, port 6379, 2 GB `allkeys-lru` policy, `--restart unless-stopped`). Safe to re-run: starts an existing stopped container rather than recreating it.

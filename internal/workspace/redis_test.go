@@ -92,6 +92,23 @@ func TestVectorBinaryRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRedisAddrCandidates_FallsBack7379To6379OnLocalhost(t *testing.T) {
+	got := redisAddrCandidates("localhost:7379")
+	if len(got) != 2 {
+		t.Fatalf("want 2 candidates, got %d (%v)", len(got), got)
+	}
+	if got[0] != "localhost:7379" || got[1] != "localhost:6379" {
+		t.Fatalf("unexpected candidates: %v", got)
+	}
+}
+
+func TestRedisAddrCandidates_NoFallbackForOtherHosts(t *testing.T) {
+	got := redisAddrCandidates("redis.internal:7379")
+	if len(got) != 1 || got[0] != "redis.internal:7379" {
+		t.Fatalf("unexpected candidates: %v", got)
+	}
+}
+
 // --- integration tests (skip when Redis is unavailable) ----------------------
 
 func newWorkspaceOrSkip(t *testing.T) *Workspace {

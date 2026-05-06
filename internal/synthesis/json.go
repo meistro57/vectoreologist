@@ -28,17 +28,29 @@ type JSONSummary struct {
 	TotalAnomalies int `json:"total_anomalies"`
 }
 
+// JSONTaxonomy is the JSON representation of a TaxonomyLabel.
+type JSONTaxonomy struct {
+	Topic            string  `json:"topic"`
+	Mode             string  `json:"mode"`
+	EpistemicPosture string  `json:"epistemic_posture"`
+	SourceFamily     string  `json:"source_family,omitempty"`
+	Confidence       float64 `json:"confidence"`
+	LabelWarning     string  `json:"label_warning,omitempty"`
+	SemanticConcept  string  `json:"semantic_concept,omitempty"`
+}
+
 type JSONCluster struct {
-	ID        int       `json:"id"`
-	Label     string    `json:"label"`
-	Source    string    `json:"source,omitempty"` // original layer/source-based label
-	Size      int       `json:"size"`
-	Density   float64   `json:"density"`
-	Coherence float64   `json:"coherence"`
-	Centroid  []float32 `json:"centroid"`
-	VectorIDs []uint64  `json:"vector_ids"`
-	Reasoning string    `json:"reasoning"`
-	IsAnomaly bool      `json:"is_anomaly"`
+	ID        int           `json:"id"`
+	Label     string        `json:"label"`
+	Source    string        `json:"source,omitempty"` // original layer/source-based label
+	Size      int           `json:"size"`
+	Density   float64       `json:"density"`
+	Coherence float64       `json:"coherence"`
+	Centroid  []float32     `json:"centroid"`
+	VectorIDs []uint64      `json:"vector_ids"`
+	Reasoning string        `json:"reasoning"`
+	IsAnomaly bool          `json:"is_anomaly"`
+	Taxonomy  *JSONTaxonomy `json:"taxonomy,omitempty"`
 }
 
 type JSONSampleLink struct {
@@ -66,11 +78,15 @@ type JSONMoat struct {
 }
 
 type JSONAnomaly struct {
-	Type           string `json:"type"`
-	Subject        string `json:"subject"`
-	ClusterID      int    `json:"cluster_id"`
-	ReasoningChain string `json:"reasoning_chain"`
-	IsAnomaly      bool   `json:"is_anomaly"`
+	Type           string   `json:"type"`
+	Subject        string   `json:"subject"`
+	ClusterID      int      `json:"cluster_id"`
+	ReasoningChain string   `json:"reasoning_chain"`
+	IsAnomaly      bool     `json:"is_anomaly"`
+	AnomalyType    string   `json:"anomaly_type,omitempty"`
+	Evidence       string   `json:"evidence,omitempty"`
+	PossibleCauses []string `json:"possible_causes,omitempty"`
+	RequiresReview bool     `json:"requires_review,omitempty"`
 }
 
 // GenerateJSON exports findings to a JSON file alongside the markdown report.
@@ -144,13 +160,17 @@ func (s *Synthesizer) GenerateJSON(
 			ClusterID:      cid,
 			ReasoningChain: f.ReasoningChain,
 			IsAnomaly:      true,
+			AnomalyType:    f.AnomalyType,
+			Evidence:       f.Evidence,
+			PossibleCauses: f.PossibleCauses,
+			RequiresReview: f.RequiresReview,
 		})
 	}
 
 	// Enrich clusters.
 	jClusters := make([]JSONCluster, len(clusters))
 	for i, c := range clusters {
-		jClusters[i] = JSONCluster{
+		jc := JSONCluster{
 			ID:        c.ID,
 			Label:     c.Label,
 			Source:    c.Source,
@@ -162,6 +182,18 @@ func (s *Synthesizer) GenerateJSON(
 			Reasoning: clusterReasoning[c.ID],
 			IsAnomaly: clusterAnomalous[c.ID],
 		}
+		if c.Taxonomy != nil {
+			jc.Taxonomy = &JSONTaxonomy{
+				Topic:            c.Taxonomy.Topic,
+				Mode:             c.Taxonomy.Mode,
+				EpistemicPosture: c.Taxonomy.EpistemicPosture,
+				SourceFamily:     c.Taxonomy.SourceFamily,
+				Confidence:       c.Taxonomy.Confidence,
+				LabelWarning:     c.Taxonomy.LabelWarning,
+				SemanticConcept:  c.Taxonomy.SemanticConcept,
+			}
+		}
+		jClusters[i] = jc
 	}
 
 	// Enrich bridges.
