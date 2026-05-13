@@ -2,6 +2,7 @@
 
 **vec·tor·e·ol·o·gist** | /ˌvɛk·tər·ɪˈɒl·ə·dʒɪst/ | *noun*  
 > One who excavates meaning from the geometry of thought.
+<img width="656" height="661" alt="image" src="https://github.com/user-attachments/assets/d8ebf658-0df6-448a-af11-7e44c1a6dd22" />
 
 [![CI](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml/badge.svg)](https://github.com/meistro57/vectoreologist/actions/workflows/ci.yml)
 [![Go 1.23+](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)](https://go.dev)
