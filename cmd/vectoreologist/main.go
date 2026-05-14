@@ -44,8 +44,11 @@ type config struct {
 	incremental    bool
 	minClusterSize int
 	minSamples     int // no-op; kept for backwards CLI compatibility
-	redisURL       string
-	epsilon        float64
+	redisURL          string
+	epsilon           float64
+	clusterSeed       int64
+	moatThreshold     float64
+	filterDegenerate  bool
 	// Query flags — when any is set, the pipeline does not run; instead a JSON
 	// report file is read and filtered results are printed.
 	queryReport   string
@@ -211,6 +214,9 @@ func runOnce(cfg config) (string, error) {
 	fmt.Println("🗺️  Phase 2: Topology Analysis")
 	topo := topology.New()
 	topo.SetClusterParams(cfg.minClusterSize, cfg.epsilon)
+	topo.SetSeed(cfg.clusterSeed)
+	topo.SetMoatThreshold(cfg.moatThreshold)
+	topo.SetFilterDegenerate(cfg.filterDegenerate)
 
 	// When Redis workspace is enabled, load topology sample from Redis instead
 	// of the in-memory slice.
@@ -385,6 +391,9 @@ func main() {
 	minSamples := flag.Int("min-samples", 3, "(no-op; DBSCAN uses --min-cluster-size only)")
 	redisURL := flag.String("redis-url", "redis://localhost:6379", "Redis URL for vector workspace (e.g. redis://localhost:6379); empty = disabled")
 	epsilon := flag.Float64("epsilon", 0.3, "DBSCAN neighbourhood radius (cosine distance; 0.3 = 70% similarity threshold)")
+	clusterSeed := flag.Int64("cluster-seed", 42, "RNG seed for deterministic clustering (0 = random each run)")
+	moatThreshold := flag.Float64("moat-threshold", 0.5, "Max centroid similarity for a pair to qualify as a knowledge moat (raise for dense corpora)")
+	filterDegenerate := flag.Bool("filter-degenerate", true, "Exclude density=1.0/coherence=1.0 null-content clusters from bridge and moat analysis")
 	queryReport := flag.String("query-report", "", "Path to a JSON report to query instead of running the pipeline")
 	queryTopic := flag.String("query-topic", "", "Filter clusters by topic (e.g. consciousness_philosophy)")
 	queryMode := flag.String("query-mode", "", "Filter clusters by mode (e.g. scholarly_annotation)")
@@ -444,8 +453,11 @@ func main() {
 		incremental:    *incremental,
 		minClusterSize: *minClusterSize,
 		minSamples:     *minSamples,
-		redisURL:       *redisURL,
-		epsilon:        *epsilon,
+		redisURL:         *redisURL,
+		epsilon:          *epsilon,
+		clusterSeed:      *clusterSeed,
+		moatThreshold:    *moatThreshold,
+		filterDegenerate: *filterDegenerate,
 	}
 	if err := validateConfig(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

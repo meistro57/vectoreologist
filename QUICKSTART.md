@@ -44,6 +44,9 @@ Create a `.env` file — it's loaded automatically at startup:
 cat > .env << 'EOF'
 DEEPSEEK_API_KEY=your_key_here
 QDRANT_URL=http://localhost:6333
+CLUSTER_SEED=42
+MOAT_THRESHOLD=0.5
+FILTER_DEGENERATE=true
 EOF
 ```
 
@@ -167,6 +170,25 @@ diff findings/a/vectoreology_*.md findings/b/vectoreology_*.md
 make run-collection COLLECTION=my_large_collection
 ```
 
+### Tune moat sensitivity for dense corpora
+```bash
+./vectoreologist --collection my_collection --moat-threshold 0.65
+```
+
+### Reproducible vs random topology runs
+```bash
+# deterministic (default)
+./vectoreologist --collection my_collection --cluster-seed 42
+
+# different subsamples/link sets each run
+./vectoreologist --collection my_collection --cluster-seed 0
+```
+
+### Include null-content clusters in bridge/moat analysis
+```bash
+./vectoreologist --collection my_collection --filter-degenerate=false
+```
+
 ### Watch mode
 ```bash
 ./vectoreologist --collection my_collection --watch 5m
@@ -224,7 +246,7 @@ make build
 ### "Error: --batch-size must be > 0" (or similar flag validation errors)
 Use valid numeric bounds:
 ```bash
-./vectoreologist --collection my_collection --sample 5000 --batch-size 1000 --min-cluster-size 5
+./vectoreologist --collection my_collection --sample 5000 --batch-size 1000 --min-cluster-size 5 --min-samples 3
 ```
 
 ---
@@ -236,3 +258,5 @@ Use valid numeric bounds:
 3. Query the `vectoreology_findings` Qdrant collection directly
 4. Tune `--sample` up for deeper coverage, down for faster iteration
 5. Try `--sample-strategy diverse` to maximise vector-space coverage
+6. Raise `--moat-threshold` for dense corpora where clusters share baseline vocabulary
+7. Use `--cluster-seed 0` when you want stochastic topology runs

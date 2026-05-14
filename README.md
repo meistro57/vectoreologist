@@ -108,6 +108,9 @@ A local `.env` is loaded automatically before flags are parsed (without overridi
 ```bash
 DEEPSEEK_API_KEY=your_key_here
 QDRANT_URL=http://localhost:6333
+CLUSTER_SEED=42
+MOAT_THRESHOLD=0.5
+FILTER_DEGENERATE=true
 ```
 
 If no DeepSeek key is provided, topology and anomaly phases still run and reasoning is skipped.
@@ -147,6 +150,9 @@ If no DeepSeek key is provided, topology and anomaly phases still run and reason
 # Disable Redis workspace
 ./vectoreologist --collection my_collection --redis-url ""
 
+# Tune topology controls (deterministic seed, moat threshold, degenerate filtering)
+./vectoreologist --collection my_collection --cluster-seed 42 --moat-threshold 0.65 --filter-degenerate=true
+
 # Query an existing JSON report — no pipeline run
 ./vectoreologist --query-report findings/vectoreology_2026-05-04_10-00-00.json \
   --query-topic consciousness_philosophy --query-mismatch
@@ -179,6 +185,9 @@ Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-c
 | `--min-cluster-size` | `5` | Minimum DBSCAN cluster size |
 | `--min-samples` | `3` | (no-op; DBSCAN uses `--min-cluster-size` only) |
 | `--epsilon` | `0.3` | DBSCAN neighbourhood radius (cosine distance) |
+| `--cluster-seed` | `42` | RNG seed for deterministic topology sampling/link selection (`0` = random each run) |
+| `--moat-threshold` | `0.5` | Max centroid similarity to classify a pair as a moat (raise for dense corpora) |
+| `--filter-degenerate` | `true` | Exclude density/coherence ≈ `1.0` null-content clusters from bridge + moat analysis |
 | `--redis-url` | `redis://localhost:6379` | Redis URL for vector workspace; empty string disables it |
 | `--query-report` | `""` | Path to a JSON report to query (pipeline does not run) |
 | `--query-topic` | `""` | Filter clusters by topic (e.g. `consciousness_philosophy`) |
@@ -297,6 +306,8 @@ Baseline comparison file used during this refactor:
 Topology analysis is fully in-process — no Python subprocess, no OOM guards needed. The pipeline caps input at `MaxTopologyTotal = 20,000` vectors, then PCA reduces to 50 dimensions in-process before DBSCAN runs. Peak RAM for topology is approximately 120–150 MB.
 
 Redis workspace is enabled by default (`--redis-url redis://localhost:6379`). Extraction streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded into Go RAM for topology. Run `./scripts/start-redis.sh` to start a local Redis container. Pass `--redis-url ""` to disable if Redis is unavailable.
+
+Topology runs are deterministic by default (`--cluster-seed 42`) and can be randomized with `--cluster-seed 0`. Moat sensitivity is configurable with `--moat-threshold` (default `0.5`, raise for dense corpora). Degenerate null-content clusters (density/coherence ~1.0) are filtered from bridge/moat analysis by default (`--filter-degenerate=true`).
 
 Use `--sample` to limit extraction size and `--sample-strategy diverse` to maximise vector-space coverage.
 

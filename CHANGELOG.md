@@ -10,6 +10,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased]
 
 ### Added
+- **Topology control flags + env examples** — added `--cluster-seed` (default `42`), `--moat-threshold` (default `0.5`), and `--filter-degenerate` (default `true`) plus matching `.env.example` entries for reproducible topology tuning.
 - **Taxonomy classification system** (`internal/taxonomy`) — rule-based second-pass classifier assigns knowledge labels on 3 axes after clustering: `topic` (10 domains: consciousness_philosophy, quantum_mechanics, mathematics, …), `mode` (5 values: didactic_teaching, meta_descriptive_summary, scholarly_annotation, transformational_dialogue, functional_definition), and `epistemic_posture` (5 values: doctrinal_assertion, descriptive_abstract, externally_referenced, experiential_reframing, conditional_revelation). No additional LLM calls required — pure keyword/phrase scoring.
 - **Label repair** — `CheckLabelMismatch` detects when a cluster's source-based label contradicts the classifier's topic or mode and sets `TaxonomyLabel.LabelWarning`. Fixes classes of errors like `"other / quantum_mechanics"` labeling consciousness content.
 - **Structured anomaly types** — 4 new anomaly detectors: `DetectLabelMismatches` (topic/mode conflict), `DetectSourceOversampling` (single source >70% of cluster), `DetectSummaryArtifacts` (meta-summary mode on topic-specific cluster), `DetectEmbeddingBias` (density >0.95 + single source). Each finding carries `Evidence`, `PossibleCauses []string`, and `RequiresReview bool`.
@@ -24,6 +25,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **JSON synthesis diagnostics for Lens** — JSON output now includes summary diagnostics (`duplicate_heavy_clusters`, `oversampled_clusters`, `skipped_bridges`), top-level `attractors`, `recommendations`, `review_items`, plus cluster/bridge review fields (`suggested_label`, snippets/evidence, flags, skipped state).
 
 ### Changed
+- **Topology sampling + link selection now deterministic by default** — internal RNG is seeded (`42`) so subsampling and bridge sample-links are stable across runs unless `--cluster-seed 0` is set.
+- **Moat detection threshold is now configurable** — moat classification uses `--moat-threshold` (default `0.5`) instead of a fixed hardcoded cutoff.
+- **Degenerate null-content clusters can be filtered from cross-cluster analysis** — `--filter-degenerate=true` removes density/coherence≈1.0 clusters from bridge/moat generation while keeping them visible in cluster output.
 - **Semantic attractor keyword filtering tightened** — generic metric tokens (for example `high`, `density`, `coherence`, `material`) are now excluded from attractor anchors so attractors stay semantic.
 - **Heading truncation safety** — heading shortening now prefers sentence boundaries and avoids mid-word/mid-sentence clipping.
 - **`--collection` defaults to `meta_reflections`** — the flag is no longer required; running `./vectoreologist` with no arguments excavates `meta_reflections` at full collection size.

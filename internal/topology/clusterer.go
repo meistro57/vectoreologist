@@ -18,15 +18,23 @@ const MaxTopologyTotal = 20000
 
 // Topology holds configuration for cluster analysis.
 type Topology struct {
-	minClusterSize int
-	epsilon        float64
+	minClusterSize    int
+	epsilon           float64
+	rng               *rand.Rand
+	moatMaxSimilarity float64
+	filterDegenerate  bool
 }
 
 // New returns a Topology with sensible defaults.
+// Seeded at 42 for deterministic runs — override with SetSeed.
+// Moat threshold defaults to 0.5: pairs with centroid sim < 0.5 are moats.
 func New() *Topology {
 	return &Topology{
-		minClusterSize: 5,
-		epsilon:        0.3,
+		minClusterSize:    5,
+		epsilon:           0.3,
+		rng:               rand.New(rand.NewSource(42)),
+		moatMaxSimilarity: 0.5,
+		filterDegenerate:  false,
 	}
 }
 
@@ -41,6 +49,40 @@ func (t *Topology) SetClusterParams(minClusterSize int, epsilon float64) {
 	}
 }
 
+// SetSeed reseeds the internal RNG for deterministic clustering.
+// Pass 0 to use a truly random seed (time-based).
+func (t *Topology) SetSeed(seed int64) {
+	if seed == 0 {
+		t.rng = rand.New(rand.NewSource(rand.Int63()))
+	} else {
+		t.rng = rand.New(rand.NewSource(seed))
+	}
+}
+
+// SetMoatThreshold sets the maximum centroid similarity for a cluster pair to
+// qualify as a knowledge moat. Default 0.5 — pairs with sim < 0.5 become moats.
+// Raise to 0.6–0.7 for dense corpora where all clusters share core vocabulary.
+func (t *Topology) SetMoatThreshold(threshold float64) {
+	if threshold > 0 {
+		t.moatMaxSimilarity = threshold
+	}
+}
+
+// SetFilterDegenerate controls whether density≥0.99 / coherence≥0.99 clusters
+// are excluded from bridge and moat analysis. These are null-content clusters
+// (index markers, page numbers, section headers) that pollute cross-cluster
+// topology. They still appear in the cluster report so they remain visible.
+func (t *Topology) SetFilterDegenerate(filter bool) {
+	t.filterDegenerate = filter
+}
+
+// isDegenerate returns true for clusters that are almost certainly null-content
+// vectors (index entries, page numbers, headers). Perfect density AND coherence
+// means all member vectors are near-identical — no real semantic content.
+func isDegenerate(c models.Cluster) bool {
+	return c.Density >= 0.99 && c.Coherence >= 0.99
+}
+
 // AnalyzeClusters runs PCA + DBSCAN on the provided vectors.
 // All computation is in-process — no Python subprocess is spawned.
 func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.VectorMetadata) []models.Cluster {
@@ -48,11 +90,12 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 		return nil
 	}
 
-	// If the input exceeds the safe topology total, randomly subsample.
+	// If the input exceeds the safe topology total, randomly subsample using
+	// the seeded RNG for deterministic output across runs.
 	if len(vectors) > MaxTopologyTotal {
 		fmt.Printf("   ℹ Topology: sampling %d of %d vectors to stay within memory limits (use --sample %d to cap at extraction)\n",
 			MaxTopologyTotal, len(vectors), MaxTopologyTotal)
-		indices := rand.Perm(len(vectors))[:MaxTopologyTotal]
+		indices := t.rng.Perm(len(vectors))[:MaxTopologyTotal]
 		sort.Ints(indices)
 		sampledVecs := make([][]float32, MaxTopologyTotal)
 		sampledMeta := make([]models.VectorMetadata, MaxTopologyTotal)
@@ -252,6 +295,10 @@ func pluralityKey(m map[string]int, fallback string) string {
 
 // FindBridges identifies semantic connections between clusters and populates
 // SampleLinks with representative cross-cluster chunk pairs.
+//
+// When filterDegenerate is enabled on the Topology, clusters with density≥0.99
+// and coherence≥0.99 are excluded from bridge analysis. These are null-content
+// clusters (index markers, page numbers) that produce false bridges.
 func (t *Topology) FindBridges(clusters []models.Cluster, vectors [][]float32, metadata []models.VectorMetadata) []models.Bridge {
 	idToVec := make(map[uint64][]float32, len(metadata))
 	for i, m := range metadata {
@@ -260,15 +307,32 @@ func (t *Topology) FindBridges(clusters []models.Cluster, vectors [][]float32, m
 		}
 	}
 
+	// Build the working set, optionally skipping degenerate clusters.
+	working := clusters
+	if t.filterDegenerate {
+		working = make([]models.Cluster, 0, len(clusters))
+		skipped := 0
+		for _, c := range clusters {
+			if isDegenerate(c) {
+				skipped++
+				continue
+			}
+			working = append(working, c)
+		}
+		if skipped > 0 {
+			fmt.Printf("   ℹ Bridge analysis: skipped %d degenerate cluster(s) (density=1.0/coherence=1.0)\n", skipped)
+		}
+	}
+
 	bridges := []models.Bridge{}
-	for i := 0; i < len(clusters); i++ {
-		for j := i + 1; j < len(clusters); j++ {
-			sim := cosineSimilarity(clusters[i].Centroid, clusters[j].Centroid)
+	for i := 0; i < len(working); i++ {
+		for j := i + 1; j < len(working); j++ {
+			sim := cosineSimilarity(working[i].Centroid, working[j].Centroid)
 			if sim > 0.3 {
-				links := computeSampleLinks(clusters[i].VectorIDs, clusters[j].VectorIDs, idToVec, 5)
+				links := t.computeSampleLinks(working[i].VectorIDs, working[j].VectorIDs, idToVec, 5)
 				bridges = append(bridges, models.Bridge{
-					ClusterA:    clusters[i].ID,
-					ClusterB:    clusters[j].ID,
+					ClusterA:    working[i].ID,
+					ClusterB:    working[j].ID,
 					Strength:    sim,
 					LinkType:    classifyLink(sim),
 					SampleLinks: links,
@@ -285,11 +349,12 @@ type vecEntry struct {
 }
 
 // gatherVecs collects up to limit vectors from the lookup for the given IDs.
-func gatherVecs(ids []uint64, lookup map[uint64][]float32, limit int) []vecEntry {
+// Uses the Topology's seeded RNG for deterministic shuffling.
+func (t *Topology) gatherVecs(ids []uint64, lookup map[uint64][]float32, limit int) []vecEntry {
 	if len(ids) > limit {
 		shuffled := make([]uint64, len(ids))
 		copy(shuffled, ids)
-		rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+		t.rng.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
 		ids = shuffled
 	}
 	out := make([]vecEntry, 0, min(len(ids), limit))
@@ -305,10 +370,10 @@ func gatherVecs(ids []uint64, lookup map[uint64][]float32, limit int) []vecEntry
 }
 
 // computeSampleLinks returns the top-n cross-cluster pairs by cosine similarity.
-func computeSampleLinks(aIDs, bIDs []uint64, idToVec map[uint64][]float32, n int) []models.SampleLink {
+func (t *Topology) computeSampleLinks(aIDs, bIDs []uint64, idToVec map[uint64][]float32, n int) []models.SampleLink {
 	const perSide = 50
-	aVecs := gatherVecs(aIDs, idToVec, perSide)
-	bVecs := gatherVecs(bIDs, idToVec, perSide)
+	aVecs := t.gatherVecs(aIDs, idToVec, perSide)
+	bVecs := t.gatherVecs(bIDs, idToVec, perSide)
 	if len(aVecs) == 0 || len(bVecs) == 0 {
 		return nil
 	}
@@ -333,16 +398,29 @@ func computeSampleLinks(aIDs, bIDs []uint64, idToVec map[uint64][]float32, n int
 	return links
 }
 
-// FindMoats identifies isolated cluster pairs.
+// FindMoats identifies semantically isolated cluster pairs.
+// A pair qualifies as a moat when their centroid similarity falls below
+// t.moatMaxSimilarity (default 0.5). Degenerate clusters are excluded when
+// filterDegenerate is enabled, since their centroids are meaningless.
 func (t *Topology) FindMoats(clusters []models.Cluster) []models.Moat {
+	working := clusters
+	if t.filterDegenerate {
+		working = make([]models.Cluster, 0, len(clusters))
+		for _, c := range clusters {
+			if !isDegenerate(c) {
+				working = append(working, c)
+			}
+		}
+	}
+
 	moats := []models.Moat{}
-	for i := 0; i < len(clusters); i++ {
-		for j := i + 1; j < len(clusters); j++ {
-			sim := cosineSimilarity(clusters[i].Centroid, clusters[j].Centroid)
-			if sim < 0.1 {
+	for i := 0; i < len(working); i++ {
+		for j := i + 1; j < len(working); j++ {
+			sim := cosineSimilarity(working[i].Centroid, working[j].Centroid)
+			if sim < t.moatMaxSimilarity {
 				moats = append(moats, models.Moat{
-					ClusterA:    clusters[i].ID,
-					ClusterB:    clusters[j].ID,
+					ClusterA:    working[i].ID,
+					ClusterB:    working[j].ID,
 					Distance:    1.0 - sim,
 					Explanation: "No semantic bridge detected",
 				})
@@ -380,4 +458,3 @@ func classifyLink(sim float64) string {
 		return "isolated"
 	}
 }
-

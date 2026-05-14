@@ -61,6 +61,9 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 - PCA uses the covariance-matrix approach: only a d×d float64 matrix is allocated (never n×d), then `mat.EigenSym` from gonum decomposes it.
 - L2-normalisation (`l2Normalise`) is applied to every vector before DBSCAN.
 - DBSCAN default epsilon is `0.3` (cosine distance ≈ 70% similarity threshold), configurable with `--epsilon`.
+- `--cluster-seed` defaults to `42` for deterministic topology subsampling and bridge sample-link selection; `0` randomizes per run.
+- `--moat-threshold` defaults to `0.5` (pairs below this centroid similarity become moats).
+- `--filter-degenerate` defaults to `true` (density/coherence≈1.0 clusters are excluded from bridge/moat analysis).
 - `buildNeighborLists` precomputes all pairwise neighbours in parallel using atomic counters.
 - `MaxTopologyTotal = 20000` — input is random-sampled to this cap before PCA runs.
 

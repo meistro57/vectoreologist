@@ -39,6 +39,11 @@ All computation is pure Go — no Python subprocess, no external runtime.
 - **Bridge strength**: Inter-cluster cosine similarity
 - **Moat distance**: Semantic isolation measure
 
+**Topology controls:**
+- `--cluster-seed` (default `42`) makes topology sampling and bridge-link selection deterministic; `0` enables random seeding per run
+- `--moat-threshold` (default `0.5`) sets the maximum centroid similarity for moat classification
+- `--filter-degenerate` (default `true`) excludes density/coherence≈1.0 null-content clusters from bridge/moat analysis
+
 ### Phase 3: Reasoning (DeepSeek R1)
 ```
 For each cluster: "What concept does this represent?"
@@ -144,6 +149,7 @@ Use cluster labels to annotate raw vectors in the source collection.
 - **Clustering**: DBSCAN with precomputed neighbour lists, parallel across all CPU cores; PCA via covariance matrix O(n·d²) — parallel, bounded by d×d not n×d
 - **Cap**: `MaxTopologyTotal = 20,000` — input is random-sampled before PCA runs
 - **Redis workspace**: enabled by default (`redis://localhost:6379`); keeps Go heap at O(batch_size) during extraction; only `MaxTopologyTotal` vectors are loaded into RAM for topology
+- **Determinism**: default seed `42` keeps subsampling and bridge sample links reproducible across runs
 
 ## Dependencies
 
@@ -166,8 +172,14 @@ Use cluster labels to annotate raw vectors in the source collection.
 ./vectoreologist --collection collection_b --output ./findings/b
 diff findings/a/vectoreology_*.md findings/b/vectoreology_*.md
 
+# Increase moat sensitivity for dense corpora
+./vectoreologist --collection my_collection --moat-threshold 0.65
+
 # Watch mode — rerun every 10 minutes
 make run-watch COLLECTION=my_collection WATCH=10m
+
+# Disable degenerate-cluster filtering for bridge/moat analysis
+./vectoreologist --collection my_collection --filter-degenerate=false
 
 # Disable Redis if unavailable
 ./vectoreologist --collection my_collection --redis-url ""
