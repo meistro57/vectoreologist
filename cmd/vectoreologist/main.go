@@ -284,7 +284,7 @@ func runOnce(cfg config) (string, error) {
 	// Phase 5: Synthesis & Storage
 	fmt.Println("📝 Phase 5: Synthesis & Storage")
 	synth := synthesis.New(cfg.qdrantURL, cfg.outputPath)
-	reportPath := synth.GenerateReport(allFindings, clusters, bridges, moats, cfg.collection)
+	reportPath := synth.GenerateReport(allFindings, clusters, bridges, moats, metadata, cfg.collection)
 	fmt.Printf("   ✓ Report written to %s\n", reportPath)
 	if err := synth.StoreFindings(allFindings, clusters); err != nil {
 		fmt.Fprintf(os.Stderr, "   ⚠ Failed to store findings: %v\n", err)

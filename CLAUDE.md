@@ -39,9 +39,10 @@ internal/taxonomy/taxonomy.go   Mode/EpistemicPosture/AnomalyType constants; Cla
 internal/taxonomy/classifier.go Classify(fragments, label) → TaxonomyLabel; ClassifyClusters()
 internal/taxonomy/repair.go     CheckLabelMismatch() — detects topic/mode label conflicts
 internal/taxonomy/query.go      Query struct; FilterClusters(); MatchesCluster()
-internal/reasoner/deepseek.go   DeepSeek API client; extracts reasoning_content for R1
-internal/synthesis/report.go    GenerateReport (markdown + taxonomy badges), StoreFindings (Qdrant stub)
-internal/synthesis/json.go      JSONReport with JSONTaxonomy on clusters; structured JSONAnomaly fields
+internal/reasoner/deepseek.go   DeepSeek API client; logs reasoning_content live, stores final-facing conclusion text + evidence
+internal/synthesis/report.go    GenerateReport orchestration, GenerateJSON handoff, StoreFindings (Qdrant)
+internal/synthesis/report_render.go Structured markdown renderer: evidence gates, diagnostics, attractors, recommendations
+internal/synthesis/json.go      JSONReport with taxonomy + diagnostics + attractors/recommendations + review flags
 internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors, Delete; binary float32 encoding
 ```
 
@@ -71,7 +72,7 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 
 ### DeepSeek reasoning
 - Default model is `deepseek-reasoner` (R1). Each call can take up to 5 minutes — timeout is set accordingly.
-- `callDeepSeek` returns a `deepSeekResponse{thinking, conclusion}` struct — `reasoning_content` is the R1 chain-of-thought.
+- `callDeepSeek` returns a `deepSeekResponse{thinking, conclusion}` struct — `reasoning_content` may be logged live, but reports store final-facing conclusions.
 - Reasoning is capped: **all clusters**, top **10 bridges** by strength, top **5 moats** by distance.
 - `--deepseek-model deepseek-chat` for fast mode (no chain-of-thought).
 

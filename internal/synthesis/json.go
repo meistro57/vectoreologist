@@ -12,20 +12,35 @@ import (
 
 // JSONReport is the top-level JSON export structure.
 type JSONReport struct {
-	Timestamp  string         `json:"timestamp"`
-	Collection string         `json:"collection"`
-	Summary    JSONSummary    `json:"summary"`
-	Clusters   []JSONCluster  `json:"clusters"`
-	Bridges    []JSONBridge   `json:"bridges"`
-	Moats      []JSONMoat     `json:"moats"`
-	Anomalies  []JSONAnomaly  `json:"anomalies"`
+	Timestamp       string             `json:"timestamp"`
+	Collection      string             `json:"collection"`
+	Summary         JSONSummary        `json:"summary"`
+	Clusters        []JSONCluster      `json:"clusters"`
+	Bridges         []JSONBridge       `json:"bridges"`
+	Moats           []JSONMoat         `json:"moats"`
+	Anomalies       []JSONAnomaly      `json:"anomalies"`
+	Attractors      []JSONAttractor    `json:"attractors,omitempty"`
+	Recommendations []string           `json:"recommendations,omitempty"`
+	ReviewItems     []string           `json:"review_items,omitempty"`
 }
 
 type JSONSummary struct {
-	TotalClusters  int `json:"total_clusters"`
-	TotalBridges   int `json:"total_bridges"`
-	TotalMoats     int `json:"total_moats"`
-	TotalAnomalies int `json:"total_anomalies"`
+	TotalClusters          int `json:"total_clusters"`
+	TotalBridges           int `json:"total_bridges"`
+	TotalMoats             int `json:"total_moats"`
+	TotalAnomalies         int `json:"total_anomalies"`
+	DuplicateHeavyClusters int `json:"duplicate_heavy_clusters"`
+	OverSampledClusters    int `json:"oversampled_clusters"`
+	SkippedBridges         int `json:"skipped_bridges"`
+}
+
+// JSONAttractor describes a recurring semantic concept across clusters/bridges.
+type JSONAttractor struct {
+	Name        string   `json:"name"`
+	Clusters    []int    `json:"clusters"`
+	Bridges     []string `json:"bridges"`
+	Confidence  float64  `json:"confidence"`
+	Explanation string   `json:"explanation,omitempty"`
 }
 
 // JSONTaxonomy is the JSON representation of a TaxonomyLabel.
@@ -40,17 +55,25 @@ type JSONTaxonomy struct {
 }
 
 type JSONCluster struct {
-	ID        int           `json:"id"`
-	Label     string        `json:"label"`
-	Source    string        `json:"source,omitempty"` // original layer/source-based label
-	Size      int           `json:"size"`
-	Density   float64       `json:"density"`
-	Coherence float64       `json:"coherence"`
-	Centroid  []float32     `json:"centroid"`
-	VectorIDs []uint64      `json:"vector_ids"`
-	Reasoning string        `json:"reasoning"`
-	IsAnomaly bool          `json:"is_anomaly"`
-	Taxonomy  *JSONTaxonomy `json:"taxonomy,omitempty"`
+	ID             int                `json:"id"`
+	Label          string             `json:"label"`
+	SuggestedLabel string             `json:"suggested_label,omitempty"`
+	Source         string             `json:"source,omitempty"` // original layer/source-based label
+	Size           int                `json:"size"`
+	Density        float64            `json:"density"`
+	Coherence      float64            `json:"coherence"`
+	Centroid       []float32          `json:"centroid"`
+	VectorIDs      []uint64           `json:"vector_ids"`
+	Reasoning      string             `json:"reasoning"`
+	IsAnomaly      bool               `json:"is_anomaly"`
+	Taxonomy       *JSONTaxonomy      `json:"taxonomy,omitempty"`
+	Confidence     float64            `json:"confidence,omitempty"`
+	FinalConcept   string             `json:"final_concept,omitempty"`
+	Snippets       []string           `json:"representative_snippets,omitempty"`
+	SourceBalance  map[string]float64 `json:"source_balance,omitempty"`
+	ReviewFlags    []string           `json:"review_flags,omitempty"`
+	DuplicateHeavy bool               `json:"duplicate_heavy,omitempty"`
+	OverSampled    bool               `json:"oversampled,omitempty"`
 }
 
 type JSONSampleLink struct {
@@ -60,13 +83,21 @@ type JSONSampleLink struct {
 }
 
 type JSONBridge struct {
-	ClusterA    int              `json:"cluster_a"`
-	ClusterB    int              `json:"cluster_b"`
-	Strength    float64          `json:"strength"`
-	LinkType    string           `json:"link_type"`
-	Label       string           `json:"label,omitempty"` // short semantic description from R1 conclusion
-	SampleLinks []JSONSampleLink `json:"sample_links"`
-	Reasoning   string           `json:"reasoning"`
+	ClusterA      int              `json:"cluster_a"`
+	ClusterB      int              `json:"cluster_b"`
+	Strength      float64          `json:"strength"`
+	LinkType      string           `json:"link_type"`
+	Label         string           `json:"label,omitempty"` // short semantic description from R1 conclusion
+	SampleLinks   []JSONSampleLink `json:"sample_links"`
+	Reasoning     string           `json:"reasoning"`
+	LabelA        string           `json:"label_a,omitempty"`
+	LabelB        string           `json:"label_b,omitempty"`
+	EvidenceA     []string         `json:"evidence_a,omitempty"`
+	EvidenceB     []string         `json:"evidence_b,omitempty"`
+	SharedConcept string           `json:"shared_concept,omitempty"`
+	Confidence    float64          `json:"confidence,omitempty"`
+	ReviewFlags   []string         `json:"review_flags,omitempty"`
+	Skipped       bool             `json:"skipped,omitempty"`
 }
 
 type JSONMoat struct {
@@ -96,10 +127,28 @@ func (s *Synthesizer) GenerateJSON(
 	clusters []models.Cluster,
 	bridges []models.Bridge,
 	moats []models.Moat,
+	metadata []models.VectorMetadata,
 	collection string,
 	timestamp string,
 ) string {
 	jsonPath := filepath.Join(s.outputPath, fmt.Sprintf("vectoreology_%s.json", timestamp))
+
+	artifact := buildReportArtifact(reportData{
+		findings:   findings,
+		clusters:   clusters,
+		bridges:    bridges,
+		moats:      moats,
+		metadata:   metadata,
+		collection: collection,
+	})
+	clusterSectionByID := make(map[int]clusterSection, len(artifact.clusterSections))
+	for _, section := range artifact.clusterSections {
+		clusterSectionByID[section.cluster.ID] = section
+	}
+	bridgeSectionByPair := make(map[[2]int]bridgeSection, len(artifact.bridgeSections))
+	for _, section := range artifact.bridgeSections {
+		bridgeSectionByPair[[2]int{section.bridge.ClusterA, section.bridge.ClusterB}] = section
+	}
 
 	// Build cluster ID → reasoning/anomaly from findings.
 	// Subject format from reasoner: "Cluster N: label"
@@ -193,13 +242,23 @@ func (s *Synthesizer) GenerateJSON(
 				SemanticConcept:  c.Taxonomy.SemanticConcept,
 			}
 		}
+		if section, ok := clusterSectionByID[c.ID]; ok {
+			jc.SuggestedLabel = section.suggestedLabel
+			jc.Confidence = section.confidence
+			jc.FinalConcept = section.finalConcept
+			jc.Snippets = section.snippets
+			jc.SourceBalance = section.sourceBalance
+			jc.ReviewFlags = section.flags
+			jc.DuplicateHeavy = section.duplicateHeavy
+			jc.OverSampled = section.overSampled
+		}
 		jClusters[i] = jc
 	}
 
 	// Enrich bridges.
 	jBridges := make([]JSONBridge, len(bridges))
 	for i, b := range bridges {
-		jBridges[i] = JSONBridge{
+		jb := JSONBridge{
 			ClusterA:    b.ClusterA,
 			ClusterB:    b.ClusterB,
 			Strength:    b.Strength,
@@ -208,6 +267,17 @@ func (s *Synthesizer) GenerateJSON(
 			SampleLinks: toJSONSampleLinks(b.SampleLinks),
 			Reasoning:   bridgeReasoning[pair{b.ClusterA, b.ClusterB}],
 		}
+		if section, ok := bridgeSectionByPair[[2]int{b.ClusterA, b.ClusterB}]; ok {
+			jb.LabelA = section.labelA
+			jb.LabelB = section.labelB
+			jb.EvidenceA = section.evidenceA
+			jb.EvidenceB = section.evidenceB
+			jb.SharedConcept = section.sharedConcept
+			jb.Confidence = section.confidence
+			jb.ReviewFlags = section.flags
+			jb.Skipped = section.skipped
+		}
+		jBridges[i] = jb
 	}
 
 	// Enrich moats.
@@ -222,19 +292,36 @@ func (s *Synthesizer) GenerateJSON(
 		}
 	}
 
+	jAttractors := make([]JSONAttractor, 0, len(artifact.attractors))
+	for _, attr := range artifact.attractors {
+		jAttractors = append(jAttractors, JSONAttractor{
+			Name:        attr.name,
+			Clusters:    attr.clusters,
+			Bridges:     attr.bridges,
+			Confidence:  attr.confidence,
+			Explanation: attr.explanation,
+		})
+	}
+
 	report := JSONReport{
 		Timestamp:  strings.ReplaceAll(timestamp, "_", "T"),
 		Collection: collection,
 		Summary: JSONSummary{
-			TotalClusters:  len(clusters),
-			TotalBridges:   len(bridges),
-			TotalMoats:     len(moats),
-			TotalAnomalies: len(anomalies),
+			TotalClusters:          len(clusters),
+			TotalBridges:           len(bridges),
+			TotalMoats:             len(moats),
+			TotalAnomalies:         len(anomalies),
+			DuplicateHeavyClusters: artifact.diagnostics.duplicateHeavyClusters,
+			OverSampledClusters:    artifact.diagnostics.overSampledClusters,
+			SkippedBridges:         artifact.diagnostics.skippedBridges,
 		},
-		Clusters:  jClusters,
-		Bridges:   jBridges,
-		Moats:     jMoats,
-		Anomalies: anomalies,
+		Clusters:        jClusters,
+		Bridges:         jBridges,
+		Moats:           jMoats,
+		Anomalies:       anomalies,
+		Attractors:      jAttractors,
+		Recommendations: artifact.recommendations,
+		ReviewItems:     artifact.reviewItems,
 	}
 
 	data, err := json.MarshalIndent(report, "", "  ")

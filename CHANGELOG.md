@@ -19,6 +19,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **`--query-*` CLI flags** — `--query-report`, `--query-topic`, `--query-mode`, `--query-posture`, `--query-mismatch` read a JSON report and print filtered clusters as JSON. Pipeline does not run when query mode is active.
 - **Taxonomy in markdown reports** — cluster sections now include a `Taxonomy` inline badge showing topic, mode, posture, confidence, and any label warning.
 - **Phase 4.5** in the pipeline — taxonomy classification and taxonomy-aware anomaly detection runs after R1 label promotion, before report generation.
+- **Structured evidence report renderer** (`internal/synthesis/report_render.go`) — report generation now builds modular sections with executive summary, evidence-gated cluster/bridge interpretation, semantic attractors, and recommendations.
+- **Bridge evidence gating** — bridge interpretation is explicitly skipped when either side lacks representative snippets (`"Insufficient evidence to interpret this bridge."`).
+- **JSON synthesis diagnostics for Lens** — JSON output now includes summary diagnostics (`duplicate_heavy_clusters`, `oversampled_clusters`, `skipped_bridges`), top-level `attractors`, `recommendations`, `review_items`, plus cluster/bridge review fields (`suggested_label`, snippets/evidence, flags, skipped state).
 
 ### Changed
 - **`--collection` defaults to `meta_reflections`** — the flag is no longer required; running `./vectoreologist` with no arguments excavates `meta_reflections` at full collection size.

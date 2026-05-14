@@ -96,12 +96,9 @@ make run-collection COLLECTION=my_collection
 
 🧠 Phase 4: DeepSeek R1 Reasoning
    reasoning 1/32: Cluster 1: surface / my_collection ...
-
    --- thinking: Cluster 1: surface / my_collection ---
-   Let me work through what this cluster represents...
-   The density of 0.73 and coherence of 0.91 suggest tight grouping...
+   ...live model reasoning output...
    ---
-
    ✓ reasoning complete (32/32)
 
 📝 Phase 5: Synthesis & Storage
@@ -121,15 +118,15 @@ Read full analysis: findings/vectoreology_2026-04-14_21-27-41.md
 
 **Noise vectors**: DBSCAN naturally excludes outliers that don't belong to any cluster — these are reported but not analysed further.
 
-**Phase 4 speed**: DeepSeek R1 (`deepseek-reasoner`) reasons about every cluster + the top 10 bridges + top 5 moats. Each call can take 20–90 seconds. Use `--deepseek-model deepseek-chat` for fast mode (no chain-of-thought, results in seconds).
+**Phase 4 speed**: DeepSeek R1 (`deepseek-reasoner`) reasons about every cluster + the top 10 bridges + top 5 moats. Each call can take 20–90 seconds. Use `--deepseek-model deepseek-chat` for fast mode. Chain-of-thought may appear in live console logs, but markdown/JSON store final-facing output only.
 
 ### Markdown Report
 
 Open `findings/vectoreology_*.md` to see:
-- Each cluster: full R1 `**Thinking:**` block + `**Conclusion:**`
-- Top semantic bridges: why the domains connect
-- Knowledge moats: why the domains are isolated
-- Anomaly section: coherence failures, density outliers, source contradictions
+- Executive Summary with duplicate-heavy, source-oversampled, and skipped-bridge counts
+- Evidence-gated cluster and bridge sections (insufficient evidence is explicitly marked)
+- Semantic Attractors and Recommendations sections
+- Final-facing interpretation text (chain-of-thought is not written into report markdown)
 
 ---
 

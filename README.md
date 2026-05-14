@@ -262,6 +262,33 @@ Each run emits:
 - Qdrant findings upsert to collection `vectoreology_findings`
 - Point stamping payload `vectoreology_last_run=<RFC3339>` on processed source points
 
+JSON reports now also include synthesis-level diagnostics and action fields consumed by Lens:
+
+- `summary.duplicate_heavy_clusters`, `summary.oversampled_clusters`, `summary.skipped_bridges`
+- top-level `attractors[]`, `recommendations[]`, `review_items[]`
+- cluster-level `suggested_label`, `representative_snippets`, `source_balance`, `review_flags`, `duplicate_heavy`, `oversampled`
+- bridge-level `label_a`, `label_b`, `evidence_a`, `evidence_b`, `shared_concept`, `review_flags`, `skipped`
+
+### Structured evidence report generation (mb_ collections)
+
+The markdown generator now enforces evidence-gated interpretation and emits:
+
+- `## Executive Summary` with duplicate-heavy, oversampling, and skipped-bridge counts
+- Cluster sections that separate machine findings from interpretive findings
+- Bridge sections that hard-fail interpretation when either side lacks snippets
+- `## Semantic Attractors` and `## Recommendations`
+- Cleaned final-facing wording (reasoning leakage stripped), word-boundary heading truncation, and analysis/conclusion de-duplication
+
+Run it against mb_ collections with the standard CLI flow:
+
+```bash
+./vectoreologist --collection mb_your_collection --output ./findings
+```
+
+Baseline comparison file used during this refactor:
+
+- `findings/vectoreology_2026-05-14_13-44-21.md`
+
 ---
 
 ## Memory & scale

@@ -50,12 +50,13 @@ func hostname(rawURL string) string {
 	return rawURL
 }
 
-// GenerateReport creates a living markdown synthesis document and a matching JSON file.
+// GenerateReport creates a markdown synthesis document and a matching JSON file.
 func (s *Synthesizer) GenerateReport(
 	findings []models.Finding,
 	clusters []models.Cluster,
 	bridges []models.Bridge,
 	moats []models.Moat,
+	metadata []models.VectorMetadata,
 	collection string,
 ) string {
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
@@ -63,84 +64,18 @@ func (s *Synthesizer) GenerateReport(
 
 	os.MkdirAll(s.outputPath, 0755)
 
-	var sb strings.Builder
-	sb.WriteString("# Vectoreology Report\n\n")
-	sb.WriteString(fmt.Sprintf("**Generated:** %s\n\n", time.Now().Format(time.RFC3339)))
-	
-	sb.WriteString("## Topology Summary\n\n")
-	sb.WriteString(fmt.Sprintf("- **Clusters:** %d\n", len(clusters)))
-	sb.WriteString(fmt.Sprintf("- **Bridges:** %d\n", len(bridges)))
-	sb.WriteString(fmt.Sprintf("- **Moats:** %d\n\n", len(moats)))
-
-	sb.WriteString("## Cluster Analysis\n\n")
-	// Build a quick lookup so we can annotate each cluster with its taxonomy.
-	clusterByID := make(map[int]models.Cluster, len(clusters))
-	for _, c := range clusters {
-		clusterByID[c.ID] = c
-	}
-	for _, finding := range findings {
-		if finding.Type == "cluster_analysis" {
-			sb.WriteString(fmt.Sprintf("### %s\n\n", finding.Subject))
-			// Emit taxonomy block if available.
-			var cid int
-			fmt.Sscanf(finding.Subject, "Cluster %d", &cid)
-			if cl, ok := clusterByID[cid]; ok && cl.Taxonomy != nil {
-				t := cl.Taxonomy
-				sb.WriteString(fmt.Sprintf(
-					"**Taxonomy** — topic: `%s` | mode: `%s` | posture: `%s` | confidence: %.2f",
-					t.Topic, t.Mode, t.EpistemicPosture, t.Confidence,
-				))
-				if t.LabelWarning != "" {
-					sb.WriteString(fmt.Sprintf(" | ⚠ %s", t.LabelWarning))
-				}
-				sb.WriteString("\n\n")
-			}
-			sb.WriteString(fmt.Sprintf("%s\n\n", finding.ReasoningChain))
-		}
-	}
-
-	sb.WriteString("## Semantic Bridges\n\n")
-	for _, finding := range findings {
-		if finding.Type == "bridge_analysis" {
-			sb.WriteString(fmt.Sprintf("### %s\n\n", finding.Subject))
-			sb.WriteString(fmt.Sprintf("%s\n\n", finding.ReasoningChain))
-		}
-	}
-
-	sb.WriteString("## Knowledge Moats\n\n")
-	for _, finding := range findings {
-		if finding.Type == "moat_analysis" {
-			sb.WriteString(fmt.Sprintf("### %s\n\n", finding.Subject))
-			sb.WriteString(fmt.Sprintf("%s\n\n", finding.ReasoningChain))
-		}
-	}
-
-	sb.WriteString("## Anomaly Findings\n\n")
-	for _, finding := range findings {
-		if !finding.IsAnomaly {
-			continue
-		}
-		sb.WriteString(fmt.Sprintf("### %s (%s)\n\n", finding.Subject, finding.Type))
-		if finding.Evidence != "" {
-			sb.WriteString(fmt.Sprintf("**Evidence:** %s\n\n", finding.Evidence))
-		}
-		if len(finding.PossibleCauses) > 0 {
-			sb.WriteString("**Possible causes:**\n")
-			for _, c := range finding.PossibleCauses {
-				sb.WriteString(fmt.Sprintf("- %s\n", c))
-			}
-			sb.WriteString("\n")
-		}
-		if finding.RequiresReview {
-			sb.WriteString("**⚠ Requires human review**\n\n")
-		}
-		sb.WriteString(fmt.Sprintf("%s\n\n", finding.ReasoningChain))
-	}
-
-	os.WriteFile(reportPath, []byte(sb.String()), 0644)
+	report := renderReport(reportData{
+		findings:   findings,
+		clusters:   clusters,
+		bridges:    bridges,
+		moats:      moats,
+		metadata:   metadata,
+		collection: collection,
+	})
+	os.WriteFile(reportPath, []byte(report), 0644)
 
 	// Also generate JSON for the TUI lens.
-	if jsonPath := s.GenerateJSON(findings, clusters, bridges, moats, collection, timestamp); jsonPath != "" {
+	if jsonPath := s.GenerateJSON(findings, clusters, bridges, moats, metadata, collection, timestamp); jsonPath != "" {
 		fmt.Printf("   ✓ JSON written to %s\n", jsonPath)
 	}
 

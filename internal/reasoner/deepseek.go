@@ -100,6 +100,7 @@ func (r *Reasoner) ReasonAboutTopology(
 			Type:           "cluster_analysis",
 			Subject:        subject,
 			ReasoningChain: formatForReport(resp),
+			Evidence:       strings.Join(snippets, "\n"),
 			Confidence:     0.75,
 			IsAnomaly:      cluster.Coherence < 0.5,
 			Clusters:       []int{cluster.ID},
@@ -111,7 +112,8 @@ func (r *Reasoner) ReasonAboutTopology(
 		done++
 		subject := fmt.Sprintf("Bridge: %d ↔ %d", bridge.ClusterA, bridge.ClusterB)
 		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
-		resp, err := r.callDeepSeek(buildBridgePrompt(bridge, byID))
+		aSnips, bSnips := bridgeSnippets(bridge, byID, 4)
+		resp, err := r.callDeepSeek(buildBridgePrompt(bridge, aSnips, bSnips))
 		if err != nil {
 			continue
 		}
@@ -120,6 +122,7 @@ func (r *Reasoner) ReasonAboutTopology(
 			Type:           "bridge_analysis",
 			Subject:        subject,
 			ReasoningChain: formatForReport(resp),
+			Evidence:       encodeBridgeEvidence(aSnips, bSnips),
 			Confidence:     0.75,
 			Clusters:       []int{bridge.ClusterA, bridge.ClusterB},
 		})
@@ -207,13 +210,9 @@ func (r *Reasoner) callDeepSeek(prompt string) (*deepSeekResponse, error) {
 	return &deepSeekResponse{thinking: thinking, conclusion: conclusion}, nil
 }
 
-// formatForReport combines the visible thinking chain and conclusion into the
-// markdown stored in the report.
+// formatForReport keeps only final-facing model output.
 func formatForReport(r *deepSeekResponse) string {
-	if r.thinking != "" {
-		return fmt.Sprintf("**Thinking:**\n%s\n\n**Conclusion:**\n%s", r.thinking, r.conclusion)
-	}
-	return r.conclusion
+	return strings.TrimSpace(r.conclusion)
 }
 
 func buildClusterPrompt(cluster models.Cluster, snippets []string) string {
@@ -289,20 +288,51 @@ func clusterSnippets(cluster models.Cluster, byID map[uint64]string, n int) []st
 	return out
 }
 
-func buildBridgePrompt(bridge models.Bridge, byID map[uint64]string) string {
+func bridgeSnippets(bridge models.Bridge, byID map[uint64]string, maxPerSide int) ([]string, []string) {
 	var aSnips, bSnips []string
-	seen := make(map[string]bool)
+	seenA := make(map[string]bool)
+	seenB := make(map[string]bool)
 	for _, sl := range bridge.SampleLinks {
-		if t, ok := byID[sl.ChunkAID]; ok && !seen[t] {
-			aSnips = append(aSnips, t)
-			seen[t] = true
+		if t, ok := byID[sl.ChunkAID]; ok && !seenA[t] {
+			aSnips = append(aSnips, truncateSnippet(t, 200))
+			seenA[t] = true
 		}
-		if t, ok := byID[sl.ChunkBID]; ok && !seen[t] {
-			bSnips = append(bSnips, t)
-			seen[t] = true
+		if t, ok := byID[sl.ChunkBID]; ok && !seenB[t] {
+			bSnips = append(bSnips, truncateSnippet(t, 200))
+			seenB[t] = true
+		}
+		if len(aSnips) >= maxPerSide && len(bSnips) >= maxPerSide {
+			break
 		}
 	}
+	return aSnips, bSnips
+}
 
+func truncateSnippet(text string, max int) string {
+	if len(text) <= max {
+		return text
+	}
+	return text[:max] + "..."
+}
+
+func encodeBridgeEvidence(aSnips, bSnips []string) string {
+	var sb strings.Builder
+	sb.WriteString("A:\n")
+	for _, s := range aSnips {
+		sb.WriteString("- ")
+		sb.WriteString(s)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("B:\n")
+	for _, s := range bSnips {
+		sb.WriteString("- ")
+		sb.WriteString(s)
+		sb.WriteString("\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func buildBridgePrompt(bridge models.Bridge, aSnips, bSnips []string) string {
 	prompt := fmt.Sprintf("Analyze this semantic bridge between vector clusters:\n\nStrength: %.2f (%s)\nCluster %d ↔ Cluster %d\n",
 		bridge.Strength, bridge.LinkType, bridge.ClusterA, bridge.ClusterB)
 

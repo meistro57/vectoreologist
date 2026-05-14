@@ -46,7 +46,7 @@ For each bridge: "Why are these domains connected?"
 For each moat: "Why is there no connection?"
 ```
 
-**Visible reasoning chains** stored with `<think>` blocks preserved.
+Live console output can show model thinking, but report artifacts store final-facing conclusions only.
 
 ### Phase 4: Anomaly Detection
 ```
@@ -58,10 +58,16 @@ For each moat: "Why is there no connection?"
 
 ### Phase 5: Synthesis
 ```
-Findings → Markdown Report + JSON Report + Qdrant Storage
+Findings + Topology + Metadata → Evidence-gated Markdown + Structured JSON + Qdrant Storage
 ```
 
 Reports written to `findings/` with timestamped filenames.
+
+Synthesis emits diagnostics-first sections:
+- Executive Summary (`duplicate_heavy_clusters`, `oversampled_clusters`, `skipped_bridges`)
+- Evidence-gated cluster and bridge interpretations
+- Semantic Attractors and Recommendations
+- JSON parity fields for Lens (`attractors`, `recommendations`, `review_items`, cluster/bridge review flags)
 
 ## Data Structures
 
@@ -111,6 +117,10 @@ type Finding struct {
     Confidence     float64
     IsAnomaly      bool
     Clusters       []int
+    AnomalyType    string
+    Evidence       string
+    PossibleCauses []string
+    RequiresReview bool
 }
 ```
 
@@ -168,52 +178,44 @@ make run-watch COLLECTION=my_collection WATCH=10m
 ```markdown
 # Vectoreology Report
 
-**Generated:** 2025-04-14T22:30:00Z
-
-## Topology Summary
-
-- **Clusters:** 23
-- **Bridges:** 15
-- **Moats:** 8
+## Executive Summary
+- Total clusters: 23
+- Total bridges: 15
+- Total moats: 8
+- Duplicate-heavy clusters: 2
+- Source-oversampled clusters: 5
+- Bridge interpretations skipped (insufficient evidence): 3
 
 ## Cluster Analysis
+### Cluster 7: Consciousness and phenomenology across observer-centered metaphysics…
+Machine Label: `surface / source_path`
+Confidence: 0.89
+Representative Evidence:
+1. "..."
+2. "..."
+3. "..."
+Analysis:
+Final-facing interpretation text.
+Conclusion:
+Observer-centered metaphysical phenomenology
+Review Flags:
+- None
 
-### Cluster 7: Consciousness & Phenomenology
-
-**Reasoning Chain:**
-<think>
-This cluster shows high coherence (0.92). The tight clustering suggests
-these sources converge on similar concepts. The centroid is semantically
-close to "awareness as fundamental" and "observer-created reality".
-</think>
-
-**Anomaly:** None
-**Confidence:** 0.89
-
+## Semantic Bridges
 ### Bridge: Cluster 7 ↔ Cluster 12
+Shared Concept:
+Measurement-consciousness coupling
+Analysis:
+Final-facing bridge interpretation.
+Conclusion:
+Measurement-consciousness coupling
 
-**Strength:** 0.74 (strong_semantic)
+## Semantic Attractors
+1. **Consciousness**
+   - Supporting clusters: 7, 12, 14
 
-**Reasoning Chain:**
-<think>
-Cluster 7 bridges to Cluster 12 through shared vocabulary around
-measurement and observation. The bridge strength is higher than expected,
-suggesting the collection treats these as more unified than conventional
-analysis does.
-</think>
-
-## Knowledge Moats
-
-### Moat: Cluster 3 ⊥ Cluster 18
-
-**Distance:** 0.91
-
-**Reasoning Chain:**
-<think>
-Cluster 3 and Cluster 18 show near-complete isolation. No semantic
-bridges detected. This could be an opportunity: are these domains
-truly unrelated, or is there a missing bridge worth exploring?
-</think>
+## Recommendations
+- Rebalance overrepresented sources in flagged clusters.
 ```
 
 ## Success Metrics

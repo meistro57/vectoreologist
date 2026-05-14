@@ -34,8 +34,10 @@ internal/topology/clusterer.go  PCA+DBSCAN pipeline, SetClusterParams, FindBridg
 internal/topology/pca.go        pcaReduce(): parallel covariance-matrix PCA via gonum EigenSym
 internal/topology/dbscan.go     runDBSCAN(), buildNeighborLists(), unitCosineDistance(), l2Normalise()
 internal/anomaly/detector.go    DetectClusterAnomalies, DetectOrphans, DetectContradictions
-internal/reasoner/deepseek.go   DeepSeek API client; extracts reasoning_content for R1
-internal/synthesis/report.go    GenerateReport (markdown), StoreFindings (Qdrant stub)
+internal/reasoner/deepseek.go   DeepSeek API client; logs reasoning_content live, stores final-facing conclusion text + evidence
+internal/synthesis/report.go    GenerateReport orchestration, GenerateJSON handoff, StoreFindings (Qdrant)
+internal/synthesis/report_render.go Structured markdown renderer: evidence gates, diagnostics, attractors, recommendations
+internal/synthesis/json.go      Structured JSON report with diagnostics, attractors, recommendations, review flags
 internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors, Delete; binary float32 encoding
 ```
 
@@ -66,7 +68,7 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 
 ### DeepSeek reasoning
 - Default model is `deepseek-reasoner` (R1). Each call can take up to 5 minutes — timeout is set accordingly.
-- `callDeepSeek` returns a `deepSeekResponse{thinking, conclusion}` struct — `reasoning_content` is the R1 chain-of-thought.
+- `callDeepSeek` returns a `deepSeekResponse{thinking, conclusion}` struct — `reasoning_content` may be logged live, but reports store final-facing conclusions.
 - Reasoning is capped: **all clusters**, top **10 bridges** by strength, top **5 moats** by distance.
 - `--deepseek-model deepseek-chat` for fast mode (no chain-of-thought).
 
