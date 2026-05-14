@@ -24,6 +24,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **JSON synthesis diagnostics for Lens** — JSON output now includes summary diagnostics (`duplicate_heavy_clusters`, `oversampled_clusters`, `skipped_bridges`), top-level `attractors`, `recommendations`, `review_items`, plus cluster/bridge review fields (`suggested_label`, snippets/evidence, flags, skipped state).
 
 ### Changed
+- **Semantic attractor keyword filtering tightened** — generic metric tokens (for example `high`, `density`, `coherence`, `material`) are now excluded from attractor anchors so attractors stay semantic.
+- **Heading truncation safety** — heading shortening now prefers sentence boundaries and avoids mid-word/mid-sentence clipping.
 - **`--collection` defaults to `meta_reflections`** — the flag is no longer required; running `./vectoreologist` with no arguments excavates `meta_reflections` at full collection size.
 - **`--redis-url` defaults to `redis://localhost:6379`** — Redis workspace is now enabled by default. Pass `--redis-url ""` to disable if Redis is unavailable.
 - **`make run-collection` always uses Redis** — the target now passes `--redis-url $(REDIS_URL)` automatically, keeping Go heap low on every standard run.

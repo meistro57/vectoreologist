@@ -156,6 +156,27 @@ func TestGenerateReport_PendingAnalysisWhenFindingMissing(t *testing.T) {
 	}
 }
 
+func TestKeywordTokens_FiltersGenericMetricWords(t *testing.T) {
+	tokens := keywordTokens("High density coherence material consciousness evolution")
+	joined := strings.Join(tokens, ",")
+	for _, banned := range []string{"high", "density", "coherence", "material"} {
+		if strings.Contains(joined, banned) {
+			t.Fatalf("generic metric word %q should be filtered, got %v", banned, tokens)
+		}
+	}
+	if !strings.Contains(joined, "consciousness") {
+		t.Fatalf("expected non-generic semantic token to remain, got %v", tokens)
+	}
+}
+
+func TestShortenForHeading_DoesNotClipMidSentence(t *testing.T) {
+	text := "This heading has no sentence boundary and should remain fully intact even when long enough to trigger truncation logic"
+	got := shortenForHeading(text, 40)
+	if got != text {
+		t.Fatalf("expected unchanged heading when no sentence boundary exists, got %q", got)
+	}
+}
+
 func TestGenerateReport_FilePathIsInsideOutputDir(t *testing.T) {
 	dir := t.TempDir()
 	s := newTestSynthesizer(dir)

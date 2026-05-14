@@ -277,7 +277,8 @@ The markdown generator now enforces evidence-gated interpretation and emits:
 - Cluster sections that separate machine findings from interpretive findings
 - Bridge sections that hard-fail interpretation when either side lacks snippets
 - `## Semantic Attractors` and `## Recommendations`
-- Cleaned final-facing wording (reasoning leakage stripped), word-boundary heading truncation, and analysis/conclusion de-duplication
+- Attractor keyword filtering to suppress generic metric terms (for example: `high`, `density`, `coherence`, `material`)
+- Cleaned final-facing wording (reasoning leakage stripped), heading-safe truncation (no mid-word/mid-sentence clipping), and analysis/conclusion de-duplication
 
 Run it against mb_ collections with the standard CLI flow:
 

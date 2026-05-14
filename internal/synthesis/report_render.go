@@ -658,6 +658,7 @@ var attractorStopwords = map[string]bool{
 	"hence": true, "however": true, "moreover": true, "although": true, "though": true,
 	"because": true, "since": true, "after": true, "before": true, "during": true,
 	"only": true, "just": true, "still": true, "even": true, "much": true,
+	"high": true, "density": true, "coherence": true, "material": true,
 }
 
 func keywordTokens(text string) []string {
@@ -1138,7 +1139,7 @@ func isEchoOf(sentence, conclusion string) bool {
 	return float64(overlap)/float64(len(cToks)) >= 0.75
 }
 
-// shortenForHeading truncates at the last word boundary <= max, appending "…" if cut.
+// shortenForHeading truncates for headings without ending mid-word or mid-sentence.
 func shortenForHeading(text string, max int) string {
 	cleaned := strings.TrimSpace(text)
 	if cleaned == "" {
@@ -1147,12 +1148,20 @@ func shortenForHeading(text string, max int) string {
 	if len(cleaned) <= max {
 		return cleaned
 	}
-	cut := cleaned[:max]
-	if idx := strings.LastIndexAny(cut, " \t"); idx > 20 {
-		cut = cut[:idx]
+
+	// Prefer a full sentence boundary at or near max.
+	punct := ".!?"
+	if idx := strings.LastIndexAny(cleaned[:max], punct); idx > 20 {
+		return strings.TrimSpace(cleaned[:idx+1])
 	}
-	cut = strings.TrimRight(cut, ",;:.* \t")
-	return cut + "…"
+	for i := max; i < len(cleaned) && i < max+80; i++ {
+		if strings.ContainsRune(punct, rune(cleaned[i])) {
+			return strings.TrimSpace(cleaned[:i+1])
+		}
+	}
+
+	// No sentence boundary nearby: return unchanged rather than clipping mid-sentence.
+	return cleaned
 }
 
 func titleFromSnippet(snippet string) string {
