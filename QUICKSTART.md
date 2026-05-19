@@ -126,7 +126,7 @@ Read full analysis: findings/vectoreology_2026-04-14_21-27-41.md
 ### Markdown Report
 
 Open `findings/vectoreology_*.md` to see:
-- Executive Summary with duplicate-heavy, source-oversampled, and skipped-bridge counts
+- Executive Summary with duplicate-heavy, source-oversampled, skipped-bridge counts, and DBSCAN parameter diagnostics
 - Evidence-gated cluster and bridge sections (insufficient evidence is explicitly marked)
 - Semantic Attractors and Recommendations sections
 - Final-facing interpretation text (chain-of-thought is not written into report markdown)
@@ -173,6 +173,11 @@ make run-collection COLLECTION=my_large_collection
 ### Tune moat sensitivity for dense corpora
 ```bash
 ./vectoreologist --collection my_collection --moat-threshold 0.65
+```
+
+### Use temporal sampling for recency-aware runs
+```bash
+./vectoreologist --collection my_collection --sample 5000 --sample-strategy temporal
 ```
 
 ### Reproducible vs random topology runs
@@ -258,5 +263,6 @@ Use valid numeric bounds:
 3. Query the `vectoreology_findings` Qdrant collection directly
 4. Tune `--sample` up for deeper coverage, down for faster iteration
 5. Try `--sample-strategy diverse` to maximise vector-space coverage
-6. Raise `--moat-threshold` for dense corpora where clusters share baseline vocabulary
-7. Use `--cluster-seed 0` when you want stochastic topology runs
+6. Try `--sample-strategy temporal` for recency-aware time-window sampling
+7. Raise `--moat-threshold` for dense corpora where clusters share baseline vocabulary
+8. Use `--cluster-seed 0` when you want stochastic topology runs

@@ -50,13 +50,14 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 - Both `excavator.New()` and `synthesis.New()` call `hostname()` to strip `http://` from URLs.
 - Max gRPC receive message size is set to **256 MB** — large collections need this.
 - `ScrollPoints.Limit` is `*uint32`, not `uint32`.
-- Point IDs can be numeric (`uint64`) or UUID strings. `GetNum()` returns 0 for UUID points; the code falls back to a 1-based sequential index in that case to keep IDs unique across the pipeline.
+- Point IDs can be numeric (`uint64`) or UUID strings. IDs are normalized into a deterministic `uint64` hash over an explicit raw namespace token (`num:<id>` or `uuid:<id>`), with `VectorMetadata.RawPointID` and `VectorMetadata.IDNamespace` persisted for reproducible stamping/auditing.
 
 ### Go clustering
 - `pcaDims = 50` constant in `pca.go` — vectors are reduced to 50 dimensions before DBSCAN.
 - PCA uses the covariance-matrix approach: only a d×d float64 matrix is allocated (never n×d), then `mat.EigenSym` from gonum decomposes it.
 - L2-normalisation (`l2Normalise`) is applied to every vector before DBSCAN.
 - DBSCAN default epsilon is `0.3` (cosine distance ≈ 70% similarity threshold), configurable with `--epsilon`.
+- `--auto-tune-dbscan` optionally adapts epsilon/minPts from sampled pairwise-distance distribution stats; fallback reasons are emitted in topology diagnostics.
 - `--cluster-seed` defaults to `42` for deterministic topology subsampling and bridge sample-link selection; `0` randomizes per run.
 - `--moat-threshold` defaults to `0.5` (pairs below this centroid similarity become moats).
 - `--filter-degenerate` defaults to `true` (density/coherence≈1.0 clusters are excluded from bridge/moat analysis).
@@ -105,8 +106,8 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 
 ## What's stubbed / incomplete
 
-- `topology.AnalyzeClusters` cluster labels come from dominant `layer/source` metadata of member vectors — not semantically meaningful yet.
-- `excavator.Sampler` strategies `Diverse` and `Temporal` fall back to random sampling.
+- Cluster labels are hybridized from top metadata signatures + centroid-nearest exemplar snippets; optional reasoner promotion can still override labels later.
+- `excavator.Sampler` `Diverse` uses metadata-stratified candidate pools + MaxMin; `Temporal` uses timestamp/run-id windows with recency weighting.
 - No streaming for DeepSeek responses — full response is buffered before printing.
 
 ---

@@ -23,11 +23,16 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Structured evidence report renderer** (`internal/synthesis/report_render.go`) — report generation now builds modular sections with executive summary, evidence-gated cluster/bridge interpretation, semantic attractors, and recommendations.
 - **Bridge evidence gating** — bridge interpretation is explicitly skipped when either side lacks representative snippets (`"Insufficient evidence to interpret this bridge."`).
 - **JSON synthesis diagnostics for Lens** — JSON output now includes summary diagnostics (`duplicate_heavy_clusters`, `oversampled_clusters`, `skipped_bridges`), top-level `attractors`, `recommendations`, `review_items`, plus cluster/bridge review fields (`suggested_label`, snippets/evidence, flags, skipped state).
+- **Real temporal sampling** (`--sample-strategy temporal`) — now performs time-window selection with recency weighting using metadata timestamps (or parsed `run_id` timestamps), instead of random fallback.
+- **Enhanced diverse sampling** (`--sample-strategy diverse`) — candidate pool selection is metadata-stratified before MaxMin/Farthest-First, improving source/layer spread while preserving geometric coverage.
+- **Explicit point-ID namespace normalization** — extraction now stores `VectorMetadata.RawPointID` and `VectorMetadata.IDNamespace`, normalizes both numeric and UUID IDs via deterministic hashed namespace keys, and supports namespace-aware stamping back to Qdrant.
+- **ID reproducibility audit** — added `AuditIDNormalization` with collision/nondeterminism/missing-field counters and CLI summary output after sampling.
 
 ### Changed
 - **Topology sampling + link selection now deterministic by default** — internal RNG is seeded (`42`) so subsampling and bridge sample-links are stable across runs unless `--cluster-seed 0` is set.
 - **Moat detection threshold is now configurable** — moat classification uses `--moat-threshold` (default `0.5`) instead of a fixed hardcoded cutoff.
 - **Degenerate null-content clusters can be filtered from cross-cluster analysis** — `--filter-degenerate=true` removes density/coherence≈1.0 clusters from bridge/moat generation while keeping them visible in cluster output.
+- **CLI sampling strategy help updated** — `--sample-strategy` documentation now advertises `temporal` as a first-class strategy.
 - **Semantic attractor keyword filtering tightened** — generic metric tokens (for example `high`, `density`, `coherence`, `material`) are now excluded from attractor anchors so attractors stay semantic.
 - **Heading truncation safety** — heading shortening now prefers sentence boundaries and avoids mid-word/mid-sentence clipping.
 - **`--collection` defaults to `meta_reflections`** — the flag is no longer required; running `./vectoreologist` with no arguments excavates `meta_reflections` at full collection size.

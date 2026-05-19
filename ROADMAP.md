@@ -1,6 +1,6 @@
 # Vectoreologist Roadmap
 
-## Current Status (2026-04)
+## Current Status (2026-05)
 
 ### Completed
 - Pure Go PCA + DBSCAN clustering (replaces Python subprocess entirely — no umap-learn, hdbscan, or Python required)
@@ -16,7 +16,9 @@
   - Markdown + JSON report generation
   - Findings upsert to `vectoreology_findings`
 - Sampling and execution modes:
-  - `random`, `stratified`, `diverse` sampling
+  - `random`, `stratified`, `diverse`, `temporal` sampling
+  - Diverse sampler now uses metadata-stratified candidate pools + MaxMin selection
+  - Temporal sampler now uses timestamp/run-id time windows with recency weighting
   - `--incremental` mode with point stamping (`vectoreology_last_run`)
   - `--watch` mode for scheduled reruns
 - `vectoreologist-lens` TUI is implemented:
@@ -64,8 +66,8 @@
 
 - Semantic label quality tuning and prompt iteration
 - Better moat explanation heuristics beyond centroid distance threshold
-- Temporal sampling strategy implementation (currently falls back)
 - Additional report diff/comparison tooling across runs
+- Optional standalone ID-normalization audit command output
 
 ## Definition of Done for Upcoming Lens Work
 

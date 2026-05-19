@@ -42,7 +42,7 @@ All topology analysis is implemented in Go (`internal/topology/pca.go`, `interna
 ## What it does
 
 1. **Extracts vectors + metadata** from a Qdrant collection over gRPC
-2. **Samples vectors** with `random`, `stratified`, or `diverse` strategy
+2. **Samples vectors** with `random`, `stratified`, `diverse`, or `temporal` strategy
 3. **Maps topology** — PCA → DBSCAN (pure Go, parallel, no subprocess)
 4. **Finds structures**: clusters, semantic bridges, and moats
 5. **Detects anomalies**: cluster anomalies, orphans, source contradictions, oversampling, and embedding bias
@@ -129,6 +129,9 @@ If no DeepSeek key is provided, topology and anomaly phases still run and reason
 # Fixed sample size with diverse sampling
 ./vectoreologist --collection my_collection --sample 5000 --sample-strategy diverse
 
+# Recency-aware temporal sampling (uses timestamp metadata when available)
+./vectoreologist --collection my_collection --sample 5000 --sample-strategy temporal
+
 # Incremental mode: only process unstamped points
 ./vectoreologist --collection my_collection --incremental
 
@@ -152,6 +155,9 @@ If no DeepSeek key is provided, topology and anomaly phases still run and reason
 
 # Tune topology controls (deterministic seed, moat threshold, degenerate filtering)
 ./vectoreologist --collection my_collection --cluster-seed 42 --moat-threshold 0.65 --filter-degenerate=true
+
+# Enable adaptive DBSCAN parameter selection
+./vectoreologist --collection my_collection --auto-tune-dbscan
 
 # Query an existing JSON report — no pipeline run
 ./vectoreologist --query-report findings/vectoreology_2026-05-04_10-00-00.json \
@@ -179,7 +185,7 @@ Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-c
 | `--deepseek-url` | `https://api.deepseek.com/v1` | DeepSeek API base URL |
 | `--deepseek-model` | `deepseek-reasoner` | `deepseek-reasoner` (R1, full chains) or `deepseek-chat` (fast) |
 | `--watch` | `""` | Re-run on an interval (for example `5m`, `1h`) |
-| `--sample-strategy` | `random` | Sampling strategy: `random`, `stratified`, `diverse` |
+| `--sample-strategy` | `random` | Sampling strategy: `random`, `stratified`, `diverse`, `temporal` |
 | `--semantic-labels` | `false` | Generate semantic cluster labels via DeepSeek |
 | `--incremental` | `false` | Only extract points not stamped by prior runs |
 | `--min-cluster-size` | `5` | Minimum DBSCAN cluster size |
@@ -188,6 +194,7 @@ Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-c
 | `--cluster-seed` | `42` | RNG seed for deterministic topology sampling/link selection (`0` = random each run) |
 | `--moat-threshold` | `0.5` | Max centroid similarity to classify a pair as a moat (raise for dense corpora) |
 | `--filter-degenerate` | `true` | Exclude density/coherence ≈ `1.0` null-content clusters from bridge + moat analysis |
+| `--auto-tune-dbscan` | `false` | Adapt DBSCAN `epsilon` and `minPts` from sampled pairwise distance statistics |
 | `--redis-url` | `redis://localhost:6379` | Redis URL for vector workspace; empty string disables it |
 | `--query-report` | `""` | Path to a JSON report to query (pipeline does not run) |
 | `--query-topic` | `""` | Filter clusters by topic (e.g. `consciousness_philosophy`) |
@@ -269,11 +276,12 @@ Each run emits:
 - Markdown report: `findings/vectoreology_<timestamp>.md`
 - JSON report: `findings/vectoreology_<timestamp>.json`
 - Qdrant findings upsert to collection `vectoreology_findings`
-- Point stamping payload `vectoreology_last_run=<RFC3339>` on processed source points
+- Point stamping payload `vectoreology_last_run=<RFC3339>` on processed source points (numeric + UUID IDs both supported via namespace-aware stamping)
 
 JSON reports now also include synthesis-level diagnostics and action fields consumed by Lens:
 
 - `summary.duplicate_heavy_clusters`, `summary.oversampled_clusters`, `summary.skipped_bridges`
+- top-level `topology.parameters` + `topology.rationale` DBSCAN diagnostics
 - top-level `attractors[]`, `recommendations[]`, `review_items[]`
 - cluster-level `suggested_label`, `representative_snippets`, `source_balance`, `review_flags`, `duplicate_heavy`, `oversampled`
 - bridge-level `label_a`, `label_b`, `evidence_a`, `evidence_b`, `shared_concept`, `review_flags`, `skipped`
@@ -307,9 +315,9 @@ Topology analysis is fully in-process — no Python subprocess, no OOM guards ne
 
 Redis workspace is enabled by default (`--redis-url redis://localhost:6379`). Extraction streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded into Go RAM for topology. Run `./scripts/start-redis.sh` to start a local Redis container. Pass `--redis-url ""` to disable if Redis is unavailable.
 
-Topology runs are deterministic by default (`--cluster-seed 42`) and can be randomized with `--cluster-seed 0`. Moat sensitivity is configurable with `--moat-threshold` (default `0.5`, raise for dense corpora). Degenerate null-content clusters (density/coherence ~1.0) are filtered from bridge/moat analysis by default (`--filter-degenerate=true`).
+Topology runs are deterministic by default (`--cluster-seed 42`) and can be randomized with `--cluster-seed 0`. Moat sensitivity is configurable with `--moat-threshold` (default `0.5`, raise for dense corpora). Degenerate null-content clusters (density/coherence ~1.0) are filtered from bridge/moat analysis by default (`--filter-degenerate=true`). Optional adaptive DBSCAN tuning is available via `--auto-tune-dbscan`, with parameter rationale exported in markdown/JSON diagnostics.
 
-Use `--sample` to limit extraction size and `--sample-strategy diverse` to maximise vector-space coverage.
+Use `--sample` to limit extraction size. Use `--sample-strategy diverse` for coverage-focused MaxMin sampling, or `--sample-strategy temporal` for recency-weighted time-window sampling when timestamps are present.
 
 ---
 

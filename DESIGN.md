@@ -23,8 +23,8 @@ Qdrant → Sample Strategy → Vectors + Metadata
 **Sampling strategies:**
 - `random`: Baseline sampling
 - `stratified`: Proportional sampling across sources
-- `diverse`: MaxMin/FarthestFirst for coverage
-- `temporal`: Time-windowed sampling
+- `diverse`: Metadata-stratified candidate pool + MaxMin/Farthest-First selection for coverage
+- `temporal`: True time-window sampling with recency weighting from metadata timestamps/run IDs
 
 ### Phase 2: Topology Analysis
 ```
@@ -43,6 +43,7 @@ All computation is pure Go — no Python subprocess, no external runtime.
 - `--cluster-seed` (default `42`) makes topology sampling and bridge-link selection deterministic; `0` enables random seeding per run
 - `--moat-threshold` (default `0.5`) sets the maximum centroid similarity for moat classification
 - `--filter-degenerate` (default `true`) excludes density/coherence≈1.0 null-content clusters from bridge/moat analysis
+- `--auto-tune-dbscan` adaptively chooses epsilon/minPts from sampled pairwise-distance distribution statistics with explicit fallback diagnostics
 
 ### Phase 3: Reasoning (DeepSeek R1)
 ```
@@ -82,6 +83,7 @@ Represents an emergent semantic concept in vector space.
 type Cluster struct {
     ID        int
     Label     string
+    Source    string
     VectorIDs []uint64
     Centroid  []float32
     Density   float64
@@ -120,6 +122,7 @@ type Finding struct {
     Subject        string
     ReasoningChain string
     Confidence     float64
+    ConfidenceBand string
     IsAnomaly      bool
     Clusters       []int
     AnomalyType    string
