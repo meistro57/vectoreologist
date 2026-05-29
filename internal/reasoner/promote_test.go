@@ -12,7 +12,7 @@ import (
 func TestExtractConclusionLabel_FromR1Format(t *testing.T) {
 	chain := "**Thinking:**\nsome long reasoning here\n\n**Conclusion:**\nThis cluster represents quantum error correction methods."
 	got := ExtractConclusionLabel(chain)
-	if got != "This cluster represents quantum error correction methods." {
+	if got != "quantum error correction methods" {
 		t.Errorf("got %q", got)
 	}
 }
@@ -20,7 +20,7 @@ func TestExtractConclusionLabel_FromR1Format(t *testing.T) {
 func TestExtractConclusionLabel_PlainText(t *testing.T) {
 	chain := "This cluster is about ancient philosophy texts."
 	got := ExtractConclusionLabel(chain)
-	if got != "This cluster is about ancient philosophy texts." {
+	if got != "ancient philosophy texts" {
 		t.Errorf("got %q", got)
 	}
 }
@@ -28,7 +28,7 @@ func TestExtractConclusionLabel_PlainText(t *testing.T) {
 func TestExtractConclusionLabel_TakesFirstSentenceOnly(t *testing.T) {
 	chain := "**Conclusion:**\nFirst sentence here. Second sentence follows."
 	got := ExtractConclusionLabel(chain)
-	if got != "First sentence here." {
+	if got != "First sentence here" {
 		t.Errorf("got %q", got)
 	}
 }
@@ -60,7 +60,7 @@ func TestExtractConclusionLabel_TakesLastBlock(t *testing.T) {
 	// R1 often emits a verbose block followed by a terse bolded one — we want the last.
 	chain := "**Thinking:**\nsome reasoning\n\n**Conclusion:**\nGiven its large size, this is a broad catch-all category for common, generic knowledge.\n\n**Conclusion:**\nThe cluster represents **Common Surface Knowledge and Noise**."
 	got := ExtractConclusionLabel(chain)
-	want := "The cluster represents Common Surface Knowledge and Noise."
+	want := "Common Surface Knowledge and Noise"
 	if got != want {
 		t.Errorf("want %q, got %q", want, got)
 	}
@@ -80,11 +80,27 @@ func TestPromoteClusterLabels_ReplacesLabel(t *testing.T) {
 		},
 	}
 	out := PromoteClusterLabels(findings, clusters)
-	if out[0].Label != "This cluster represents Stoic philosophy." {
+	if out[0].Label != "Stoic philosophy" {
 		t.Errorf("label: got %q", out[0].Label)
 	}
 	if out[0].Source != "surface / unknown" {
 		t.Errorf("source: got %q", out[0].Source)
+	}
+}
+
+func TestPromoteClusterLabels_PreservesExistingSource(t *testing.T) {
+	clusters := []models.Cluster{
+		{ID: 1, Label: "hybrid label", Source: "deep / mb_docs"},
+	}
+	findings := []models.Finding{
+		{Type: "cluster_analysis", Subject: "Cluster 1: x", ReasoningChain: "**Conclusion:**\nThis cluster represents esoteric hermeneutics."},
+	}
+	out := PromoteClusterLabels(findings, clusters)
+	if out[0].Source != "deep / mb_docs" {
+		t.Errorf("source should be preserved, got %q", out[0].Source)
+	}
+	if out[0].Label != "esoteric hermeneutics" {
+		t.Errorf("label: got %q", out[0].Label)
 	}
 }
 
@@ -121,7 +137,7 @@ func TestPromoteBridgeLabels_SetsLabel(t *testing.T) {
 		{Type: "bridge_analysis", Subject: "Bridge: 1 ↔ 3", ReasoningChain: "**Conclusion:**\nShared metaphysical grounding."},
 	}
 	out := PromoteBridgeLabels(findings, bridges)
-	if out[0].Label != "Shared metaphysical grounding." {
+	if out[0].Label != "Shared metaphysical grounding" {
 		t.Errorf("bridge label: got %q", out[0].Label)
 	}
 }

@@ -37,6 +37,19 @@ func makeMetadata(n, nSources int) []models.VectorMetadata {
 	return meta
 }
 
+func makeTemporalMetadata(n int, start int64, step int64) []models.VectorMetadata {
+	meta := make([]models.VectorMetadata, n)
+	for i := range meta {
+		meta[i] = models.VectorMetadata{
+			ID:        uint64(i + 1),
+			Timestamp: start + int64(i)*step,
+			Source:    "alpha",
+			Layer:     "surface",
+		}
+	}
+	return meta
+}
+
 // ---- helper: verify that Sample never returns more items than targetSize ----
 
 func assertSampleSize(t *testing.T, gotVecs [][]float32, gotMeta []models.VectorMetadata, want int) {
@@ -315,17 +328,59 @@ func TestSquaredL2_BasicCases(t *testing.T) {
 }
 
 // ============================================================
-// Temporal strategy (currently falls back to random)
+// Temporal strategy
 // ============================================================
 
 func TestTemporalSample_ReturnsSampledCount(t *testing.T) {
 	vecs := makeVectors(100, 4)
-	meta := makeMetadata(100, 3)
+	meta := makeTemporalMetadata(100, 1_700_000_000, 3600)
 	s := NewSampler(Temporal, 42)
 
 	gv, gm := s.Sample(vecs, meta, 25)
 	if len(gv) != 25 || len(gm) != 25 {
 		t.Errorf("want 25, got %d/%d", len(gv), len(gm))
+	}
+}
+
+func TestTemporalSample_RecencyBias(t *testing.T) {
+	vecs := makeVectors(120, 4)
+	meta := makeTemporalMetadata(120, 1_700_000_000, 60)
+	s := NewSampler(Temporal, 42)
+
+	_, gm := s.Sample(vecs, meta, 30)
+	recentThreshold := meta[90].Timestamp
+	recentCount := 0
+	for _, m := range gm {
+		if m.Timestamp >= recentThreshold {
+			recentCount++
+		}
+	}
+	if recentCount < 10 {
+		t.Fatalf("expected recency bias, got recent_count=%d", recentCount)
+	}
+}
+
+func TestTemporalSample_TimeWindowCoverage(t *testing.T) {
+	vecs := makeVectors(80, 4)
+	meta := makeTemporalMetadata(80, 1_700_000_000, 120)
+	s := NewSampler(Temporal, 7)
+
+	_, gm := s.Sample(vecs, meta, 24)
+	minTS := meta[0].Timestamp
+	maxTS := meta[len(meta)-1].Timestamp
+	window := (maxTS - minTS + 1) / 4
+	seen := map[int]bool{}
+	for _, m := range gm {
+		bucket := int((m.Timestamp - minTS) / window)
+		if bucket > 3 {
+			bucket = 3
+		}
+		seen[bucket] = true
+	}
+	for i := 0; i < 4; i++ {
+		if !seen[i] {
+			t.Fatalf("expected time window %d to be represented", i)
+		}
 	}
 }
 

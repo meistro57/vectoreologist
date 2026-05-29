@@ -10,9 +10,14 @@
 - Core `vectoreologist` CLI pipeline is working end-to-end:
   - Qdrant extraction (batched)
   - PCA + DBSCAN clustering (pure Go, in-process)
+  - Adaptive DBSCAN tuning + fallback diagnostics
   - Bridge/moat detection
-  - Anomaly detection
+  - Anomaly detection with calibrated confidence banding
   - DeepSeek reasoning integration (`deepseek-reasoner` and `deepseek-chat`)
+  - Streamed reasoning output in CLI
+  - Reasoner budget profiles/overrides (`fast`/`balanced`/`deep` + `--reasoner-max-*`)
+  - Deterministic topology-fingerprint cache for reasoner findings
+  - Incremental in-progress markdown/JSON report assembly
   - Markdown + JSON report generation
   - Findings upsert to `vectoreology_findings`
 - Sampling and execution modes:
@@ -54,11 +59,13 @@
    - Add clipboard copy action for selected reasoning text
 
 4. **Reasoning UX / Performance**
-   - Optional streaming output mode for reasoning progress
    - Better per-phase timing + throughput metrics in CLI output
+   - Configurable cadence for in-progress report writes (count- or time-based)
 
 5. **Operational Hardening**
    - Retry/backoff around network-bound operations (DeepSeek/Qdrant)
+   - Decide stream-parse failure behavior (hard-fail vs non-stream fallback)
+   - Integration tests for cache-hit/no-API-call behavior and mixed stream/non-stream responses
    - Optional write-disable mode for findings storage (`--no-store`)
    - Additional tests for incremental stamping edge cases
 

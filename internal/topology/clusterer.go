@@ -23,6 +23,8 @@ type Topology struct {
 	rng               *rand.Rand
 	moatMaxSimilarity float64
 	filterDegenerate  bool
+	autoTune          bool
+	lastDiagnostics   DBSCANDiagnostics
 }
 
 // New returns a Topology with sensible defaults.
@@ -35,6 +37,7 @@ func New() *Topology {
 		rng:               rand.New(rand.NewSource(42)),
 		moatMaxSimilarity: 0.5,
 		filterDegenerate:  false,
+		autoTune:          false,
 	}
 }
 
@@ -47,6 +50,14 @@ func (t *Topology) SetClusterParams(minClusterSize int, epsilon float64) {
 	if epsilon > 0 {
 		t.epsilon = epsilon
 	}
+}
+
+func (t *Topology) SetAutoTune(autoTune bool) {
+	t.autoTune = autoTune
+}
+
+func (t *Topology) LastDiagnostics() DBSCANDiagnostics {
+	return t.lastDiagnostics
 }
 
 // SetSeed reseeds the internal RNG for deterministic clustering.
@@ -132,8 +143,15 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 	// cosine distance (unitCosineDistance assumes unit vectors).
 	l2Normalise(reduced)
 
-	// DBSCAN clustering.
-	labels := runDBSCAN(reduced, t.epsilon, t.minClusterSize)
+	eps, minPts, diagnostics := t.selectDBSCANParams(reduced)
+	t.lastDiagnostics = diagnostics
+	if diagnostics.AutoTuned {
+		fmt.Printf("   ℹ DBSCAN auto-tuned: eps=%.3f minPts=%d (%s)\n", eps, minPts, diagnostics.Reason)
+	} else {
+		fmt.Printf("   ℹ DBSCAN parameters: eps=%.3f minPts=%d (%s)\n", eps, minPts, diagnostics.Reason)
+	}
+
+	labels := runDBSCAN(reduced, eps, minPts)
 
 	// Count noise for informational output.
 	noiseCount := 0
@@ -190,8 +208,8 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 		// Density: compactness in the reduced (post-PCA, normalised) space.
 		density := clusterDensity(reduced, indices)
 
-		// Dominant layer / source label.
-		label := dominantLabel(metadata, indices)
+		sourceLabel := dominantLabel(metadata, indices)
+		label := hybridClusterLabel(metadata, indices, vectors, centroid32, sourceLabel)
 
 		// Vector IDs from original metadata.
 		vectorIDs := make([]uint64, len(indices))
@@ -202,6 +220,7 @@ func (t *Topology) AnalyzeClusters(vectors [][]float32, metadata []models.Vector
 		clusters = append(clusters, models.Cluster{
 			ID:        rank + 1,
 			Label:     label,
+			Source:    sourceLabel,
 			VectorIDs: vectorIDs,
 			Centroid:  centroid32,
 			Density:   density,

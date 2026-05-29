@@ -77,6 +77,11 @@ func TestGenerateJSON_ReasoningAttachedToClusters(t *testing.T) {
 			Subject:        "Bridge: 1 ↔ 2",
 			ReasoningChain: "bridge reasoning",
 		},
+		{
+			Type:           "topology_diagnostics",
+			Subject:        "DBSCAN params (configured defaults): eps=0.300 minPts=5",
+			ReasoningChain: "requested_eps=0.300 requested_minPts=5 sampled_pairs=0 reason=Using configured DBSCAN defaults.",
+		},
 	}
 
 	path := s.GenerateJSON(findings, clusters, bridges, nil, nil, "test_collection", "2026-01-01_00-00-00")
@@ -115,6 +120,12 @@ func TestGenerateJSON_ReasoningAttachedToClusters(t *testing.T) {
 	if len(report.Anomalies) != 1 {
 		t.Errorf("anomalies len = %d, want 1", len(report.Anomalies))
 	}
+	if report.Topology == nil {
+		t.Fatal("topology diagnostics should be present")
+	}
+	if report.Topology.Parameters == "" {
+		t.Fatal("topology parameters should be populated")
+	}
 }
 
 func TestGenerateJSON_ExposesDiagnosticsAndAttractors(t *testing.T) {
@@ -141,6 +152,14 @@ func TestGenerateJSON_ExposesDiagnosticsAndAttractors(t *testing.T) {
 	}, {
 		Type: "cluster_analysis", Subject: "Cluster 2: y", Clusters: []int{2},
 		ReasoningChain: "Shared archetype concept", Confidence: 0.6,
+	}, {
+		Type:           "orphan_cluster",
+		Subject:        "surface / x",
+		Clusters:       []int{1},
+		IsAnomaly:      true,
+		Confidence:     0.77,
+		ConfidenceBand: "high",
+		ReasoningChain: "isolated",
 	}}
 
 	path := s.GenerateJSON(findings, clusters, bridges, nil, metadata, "mb_test", "2026-02-02_00-00-00")
@@ -203,5 +222,11 @@ func TestGenerateJSON_ExposesDiagnosticsAndAttractors(t *testing.T) {
 	}
 	if report.Bridges[0].SharedConcept == "" {
 		t.Error("bridge should expose shared_concept")
+	}
+	if len(report.Anomalies) != 1 {
+		t.Fatalf("expected one anomaly, got %d", len(report.Anomalies))
+	}
+	if report.Anomalies[0].ConfidenceBand != "high" {
+		t.Fatalf("expected confidence band high, got %q", report.Anomalies[0].ConfidenceBand)
 	}
 }

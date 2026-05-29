@@ -40,8 +40,13 @@ func TestGenerateReport_ContainsExecutiveSummaryAndRecommendations(t *testing.T)
 		{ID: 2, Source: "mb_b", Fragment: "Alpha snippet two"},
 		{ID: 3, Source: "mb_c", Fragment: "Alpha snippet three"},
 	}
+	findings := []models.Finding{{
+		Type:           "topology_diagnostics",
+		Subject:        "DBSCAN params (configured defaults): eps=0.300 minPts=5",
+		ReasoningChain: "requested_eps=0.300 requested_minPts=5 sampled_pairs=0 reason=Using configured DBSCAN defaults.",
+	}}
 
-	path := s.GenerateReport(nil, clusters, nil, nil, metadata, "mb_test")
+	path := s.GenerateReport(findings, clusters, nil, nil, metadata, "mb_test")
 	content, _ := os.ReadFile(path)
 	body := string(content)
 
@@ -52,6 +57,9 @@ func TestGenerateReport_ContainsExecutiveSummaryAndRecommendations(t *testing.T)
 	}
 	if !strings.Contains(body, "- Total clusters: 1") {
 		t.Fatalf("summary missing cluster count:\n%s", body)
+	}
+	if !strings.Contains(body, "DBSCAN diagnostics") {
+		t.Fatalf("summary missing dbscan diagnostics:\n%s", body)
 	}
 }
 
@@ -130,6 +138,34 @@ func TestGenerateReport_FlagsDuplicateHeavyAndOversampling(t *testing.T) {
 	}
 }
 
+func TestGenerateReport_IncludesAnomalyConfidenceBands(t *testing.T) {
+	dir := t.TempDir()
+	s := newTestSynthesizer(dir)
+
+	clusters := []models.Cluster{{ID: 1, Label: "surface / x", Source: "surface / x", VectorIDs: []uint64{1, 2, 3}, Size: 3, Density: 0.7, Coherence: 0.8}}
+	metadata := []models.VectorMetadata{
+		{ID: 1, Source: "mb_a", Fragment: "Snippet one"},
+		{ID: 2, Source: "mb_b", Fragment: "Snippet two"},
+		{ID: 3, Source: "mb_c", Fragment: "Snippet three"},
+	}
+	findings := []models.Finding{{
+		Type:           "orphan_cluster",
+		Subject:        "surface / x",
+		Clusters:       []int{1},
+		IsAnomaly:      true,
+		Confidence:     0.77,
+		ConfidenceBand: "high",
+		ReasoningChain: "isolated",
+	}}
+
+	path := s.GenerateReport(findings, clusters, nil, nil, metadata, "mb_test")
+	content, _ := os.ReadFile(path)
+	body := string(content)
+	if !strings.Contains(body, "orphan_cluster (high 0.77)") {
+		t.Fatalf("missing anomaly confidence label in markdown report:\n%s", body)
+	}
+}
+
 func TestGenerateReport_PendingAnalysisWhenFindingMissing(t *testing.T) {
 	dir := t.TempDir()
 	s := newTestSynthesizer(dir)
@@ -174,6 +210,22 @@ func TestShortenForHeading_DoesNotClipMidSentence(t *testing.T) {
 	got := shortenForHeading(text, 40)
 	if got != text {
 		t.Fatalf("expected unchanged heading when no sentence boundary exists, got %q", got)
+	}
+}
+
+func TestGenerateProgressReport_WritesInProgressFile(t *testing.T) {
+	dir := t.TempDir()
+	s := newTestSynthesizer(dir)
+
+	path := s.GenerateProgressReport(nil, nil, nil, nil, nil, "test")
+	if path == "" {
+		t.Fatal("GenerateProgressReport returned empty path")
+	}
+	if !strings.Contains(filepath.Base(path), "in_progress") {
+		t.Fatalf("expected in_progress filename, got %s", path)
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Errorf("progress report file does not exist at %s", path)
 	}
 }
 

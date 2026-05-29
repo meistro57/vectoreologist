@@ -3,6 +3,7 @@ package anomaly
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/meistro57/vectoreologist/internal/models"
@@ -26,38 +27,60 @@ func New() *Detector {
 // DetectClusterAnomalies identifies unusual cluster properties
 func (d *Detector) DetectClusterAnomalies(clusters []models.Cluster) []models.Finding {
 	anomalies := []models.Finding{}
+	if len(clusters) == 0 {
+		return anomalies
+	}
+	coherences := make([]float64, 0, len(clusters))
+	densities := make([]float64, 0, len(clusters))
+	for _, cluster := range clusters {
+		coherences = append(coherences, cluster.Coherence)
+		densities = append(densities, cluster.Density)
+	}
 
 	for _, cluster := range clusters {
-		// Low coherence = contradictory vectors in same cluster
 		if cluster.Coherence < d.coherenceThreshold {
+			severity := clamp01((d.coherenceThreshold - cluster.Coherence) / d.coherenceThreshold)
+			tail := blendedTailStrength(lowTailStrength(coherences, cluster.Coherence), lowZTailStrength(coherences, cluster.Coherence))
+			confidence := calibratedConfidence(severity, tail)
 			anomalies = append(anomalies, models.Finding{
-				Type:      "coherence_anomaly",
-				Subject:   cluster.Label,
-				IsAnomaly: true,
-				Clusters:  []int{cluster.ID},
+				Type:           "coherence_anomaly",
+				Subject:        cluster.Label,
+				IsAnomaly:      true,
+				Clusters:       []int{cluster.ID},
+				Confidence:     confidence,
+				ConfidenceBand: confidenceBand(confidence),
 				ReasoningChain: "Low coherence suggests contradictory concepts grouped together. " +
 					"Vectors in this cluster may represent opposing viewpoints or conflicting information.",
 			})
 		}
 
-		// Unusual density = either extremely tight or extremely loose clustering
 		if cluster.Density < d.densityThreshold {
+			severity := clamp01((d.densityThreshold - cluster.Density) / d.densityThreshold)
+			tail := blendedTailStrength(lowTailStrength(densities, cluster.Density), lowZTailStrength(densities, cluster.Density))
+			confidence := calibratedConfidence(severity, tail)
 			anomalies = append(anomalies, models.Finding{
-				Type:      "density_anomaly",
-				Subject:   cluster.Label,
-				IsAnomaly: true,
-				Clusters:  []int{cluster.ID},
+				Type:           "density_anomaly",
+				Subject:        cluster.Label,
+				IsAnomaly:      true,
+				Clusters:       []int{cluster.ID},
+				Confidence:     confidence,
+				ConfidenceBand: confidenceBand(confidence),
 				ReasoningChain: "Unusually low density indicates dispersed concept. " +
 					"May represent an over-broad semantic category or noisy clustering.",
 			})
 		}
 
 		if cluster.Density > 0.95 {
+			severity := clamp01((cluster.Density - 0.95) / 0.05)
+			tail := blendedTailStrength(highTailStrength(densities, cluster.Density), highZTailStrength(densities, cluster.Density))
+			confidence := calibratedConfidence(severity, tail)
 			anomalies = append(anomalies, models.Finding{
-				Type:      "density_anomaly",
-				Subject:   cluster.Label,
-				IsAnomaly: true,
-				Clusters:  []int{cluster.ID},
+				Type:           "density_anomaly",
+				Subject:        cluster.Label,
+				IsAnomaly:      true,
+				Clusters:       []int{cluster.ID},
+				Confidence:     confidence,
+				ConfidenceBand: confidenceBand(confidence),
 				ReasoningChain: "Extremely high density suggests near-duplicate vectors. " +
 					"May indicate redundant content or over-sampling from a single source.",
 			})
@@ -70,21 +93,43 @@ func (d *Detector) DetectClusterAnomalies(clusters []models.Cluster) []models.Fi
 // DetectOrphans finds clusters with no bridges to other domains
 func (d *Detector) DetectOrphans(clusters []models.Cluster, bridges []models.Bridge) []models.Finding {
 	orphans := []models.Finding{}
-	
-	// Build connectivity map
+	if len(clusters) == 0 {
+		return orphans
+	}
 	connected := make(map[int]bool)
+	degree := make(map[int]int)
 	for _, bridge := range bridges {
 		connected[bridge.ClusterA] = true
 		connected[bridge.ClusterB] = true
+		degree[bridge.ClusterA]++
+		degree[bridge.ClusterB]++
 	}
+
+	connectedCount := 0
+	sizes := make([]float64, 0, len(clusters))
+	degrees := make([]float64, 0, len(clusters))
+	for _, cluster := range clusters {
+		sizes = append(sizes, float64(cluster.Size))
+		degrees = append(degrees, float64(degree[cluster.ID]))
+		if connected[cluster.ID] {
+			connectedCount++
+		}
+	}
+	connectedRatio := float64(connectedCount) / float64(len(clusters))
 
 	for _, cluster := range clusters {
 		if !connected[cluster.ID] {
+			sizeTail := blendedTailStrength(highTailStrength(sizes, float64(cluster.Size)), highZTailStrength(sizes, float64(cluster.Size)))
+			isolationTail := blendedTailStrength(lowTailStrength(degrees, float64(degree[cluster.ID])), lowZTailStrength(degrees, float64(degree[cluster.ID])))
+			severity := clamp01(0.35 + 0.35*connectedRatio + 0.30*isolationTail)
+			confidence := calibratedConfidence(severity, sizeTail)
 			orphans = append(orphans, models.Finding{
-				Type:      "orphan_cluster",
-				Subject:   cluster.Label,
-				IsAnomaly: true,
-				Clusters:  []int{cluster.ID},
+				Type:           "orphan_cluster",
+				Subject:        cluster.Label,
+				IsAnomaly:      true,
+				Clusters:       []int{cluster.ID},
+				Confidence:     confidence,
+				ConfidenceBand: confidenceBand(confidence),
 				ReasoningChain: "Isolated concept with no semantic bridges to other knowledge domains. " +
 					"May represent unique/specialized knowledge or a disconnected information silo.",
 			})
@@ -100,34 +145,55 @@ func (d *Detector) DetectContradictions(
 	metadata []models.VectorMetadata,
 ) []models.Finding {
 	contradictions := []models.Finding{}
+	if len(clusters) == 0 {
+		return contradictions
+	}
 
-	// Check for clusters with high internal similarity but contradictory sources
+	sourceByID := make(map[uint64]string, len(metadata))
+	for _, meta := range metadata {
+		sourceByID[meta.ID] = meta.Source
+	}
+
+	coherences := make([]float64, 0, len(clusters))
+	diversities := make([]float64, 0, len(clusters))
+	clusterSources := make(map[int]map[string]int, len(clusters))
 	for _, cluster := range clusters {
+		coherences = append(coherences, cluster.Coherence)
 		sources := make(map[string]int)
 		for _, vecID := range cluster.VectorIDs {
-			// Find metadata for this vector
-			for _, meta := range metadata {
-				if meta.ID == vecID {
-					sources[meta.Source]++
-					break
-				}
+			source := strings.TrimSpace(sourceByID[vecID])
+			if source == "" {
+				source = "unknown"
 			}
+			sources[source]++
 		}
+		clusterSources[cluster.ID] = sources
+		diversities = append(diversities, float64(len(sources)))
+	}
 
-		// If cluster has high coherence but multiple distinct sources, it's potentially contradictory
+	for _, cluster := range clusters {
+		sources := clusterSources[cluster.ID]
 		if cluster.Coherence > 0.8 && len(sources) > 3 {
-			sourceList := ""
-			for src := range sources {
-				sourceList += src + ", "
+			sourceNames := make([]string, 0, len(sources))
+			for source := range sources {
+				sourceNames = append(sourceNames, source)
 			}
-
+			sort.Strings(sourceNames)
+			coherenceSeverity := clamp01((cluster.Coherence - 0.8) / 0.2)
+			diversitySeverity := clamp01(float64(len(sources)-3) / 5.0)
+			severity := clamp01(0.5*coherenceSeverity + 0.5*diversitySeverity)
+			coherenceTail := blendedTailStrength(highTailStrength(coherences, cluster.Coherence), highZTailStrength(coherences, cluster.Coherence))
+			diversityTail := blendedTailStrength(highTailStrength(diversities, float64(len(sources))), highZTailStrength(diversities, float64(len(sources))))
+			confidence := calibratedConfidence(severity, clamp01(0.5*coherenceTail+0.5*diversityTail))
 			contradictions = append(contradictions, models.Finding{
-				Type:      "source_contradiction",
-				Subject:   cluster.Label,
-				IsAnomaly: true,
-				Clusters:  []int{cluster.ID},
-				ReasoningChain: "High coherence with diverse sources suggests consensus across domains: " + sourceList +
-					"This may indicate convergent truth or a widely-propagated narrative.",
+				Type:           "source_contradiction",
+				Subject:        cluster.Label,
+				IsAnomaly:      true,
+				Clusters:       []int{cluster.ID},
+				Confidence:     confidence,
+				ConfidenceBand: confidenceBand(confidence),
+				ReasoningChain: "High coherence with diverse sources suggests consensus across domains: " + strings.Join(sourceNames, ", ") +
+					". This may indicate convergent truth or a widely-propagated narrative.",
 			})
 		}
 	}
@@ -326,6 +392,109 @@ func (d *Detector) DetectEmbeddingBias(clusters []models.Cluster, metadata []mod
 		})
 	}
 	return out
+}
+
+func calibratedConfidence(severity, tail float64) float64 {
+	return clamp01(0.55*severity + 0.45*tail)
+}
+
+func blendedTailStrength(percentileTail, zTail float64) float64 {
+	return clamp01(0.6*percentileTail + 0.4*zTail)
+}
+
+func lowZTailStrength(values []float64, value float64) float64 {
+	mean, std := meanStd(values)
+	if std == 0 {
+		return 0.5
+	}
+	z := (value - mean) / std
+	if z >= 0 {
+		return 0
+	}
+	return clamp01((-z) / 3.0)
+}
+
+func highZTailStrength(values []float64, value float64) float64 {
+	mean, std := meanStd(values)
+	if std == 0 {
+		return 0.5
+	}
+	z := (value - mean) / std
+	if z <= 0 {
+		return 0
+	}
+	return clamp01(z / 3.0)
+}
+
+func meanStd(values []float64) (float64, float64) {
+	if len(values) == 0 {
+		return 0, 0
+	}
+	mean := 0.0
+	for _, v := range values {
+		mean += v
+	}
+	mean /= float64(len(values))
+	variance := 0.0
+	for _, v := range values {
+		d := v - mean
+		variance += d * d
+	}
+	variance /= float64(len(values))
+	return mean, math.Sqrt(variance)
+}
+
+func confidenceBand(confidence float64) string {
+	switch {
+	case confidence >= 0.85:
+		return "critical"
+	case confidence >= 0.70:
+		return "high"
+	case confidence >= 0.50:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func lowTailStrength(values []float64, value float64) float64 {
+	if len(values) == 0 {
+		return 0.5
+	}
+	rank := percentileRank(values, value)
+	return 1.0 - rank
+}
+
+func highTailStrength(values []float64, value float64) float64 {
+	if len(values) == 0 {
+		return 0.5
+	}
+	return percentileRank(values, value)
+}
+
+func percentileRank(values []float64, value float64) float64 {
+	if len(values) == 0 {
+		return 0.5
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	count := 0
+	for _, v := range sorted {
+		if v <= value {
+			count++
+		}
+	}
+	return float64(count) / float64(len(sorted))
+}
+
+func clamp01(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 // ScoreAnomaly calculates anomaly weight (higher = more interesting)

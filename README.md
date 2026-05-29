@@ -10,6 +10,12 @@
 
 Vectoreologist analyzes embedding topology in Qdrant collections using pure Go PCA + DBSCAN, detects anomalies, runs DeepSeek reasoning over the topology, classifies every cluster on a 3-axis taxonomy (topic / mode / epistemic posture), writes timestamped markdown + JSON reports, stores findings in Qdrant, and includes a terminal lens for interactive exploration.
 
+## What's New (2026-05)
+
+- **Stabilized analysis quality** with adaptive DBSCAN diagnostics/fallback signaling, stronger hybrid label promotion, and calibrated anomaly confidence banding in markdown/JSON outputs.
+- **Reduced runtime and cost** with streamed DeepSeek responses, reasoner budget profiles/overrides, deterministic topology-fingerprint caching, and incremental in-progress report assembly.
+- **Expanded operator controls** via new reasoner flags: `--reasoner-profile`, `--reasoner-max-clusters`, `--reasoner-max-bridges`, `--reasoner-max-moats`, and `--reasoner-cache`.
+
 ---
 
 ## Pipeline
@@ -43,17 +49,19 @@ All topology analysis is implemented in Go (`internal/topology/pca.go`, `interna
 
 1. **Extracts vectors + metadata** from a Qdrant collection over gRPC
 2. **Samples vectors** with `random`, `stratified`, `diverse`, or `temporal` strategy
-3. **Maps topology** — PCA → DBSCAN (pure Go, parallel, no subprocess)
+3. **Maps topology** — PCA → DBSCAN (pure Go, parallel, no subprocess), with optional adaptive DBSCAN tuning and explicit fallback diagnostics
 4. **Finds structures**: clusters, semantic bridges, and moats
-5. **Detects anomalies**: cluster anomalies, orphans, source contradictions, oversampling, and embedding bias
-6. **Reasons with DeepSeek** (R1 by default; chain-of-thought logged live)
+5. **Detects anomalies** with calibrated confidence banding (percentile baseline + z-style tails)
+6. **Reasons with DeepSeek** (R1 by default) using streamed output, configurable budget profiles, and per-subject limits
 7. **Classifies knowledge** on 3 axes: `topic`, `mode`, and `epistemic_posture` — no extra LLM calls
 8. **Repairs misleading labels**: detects when a cluster's source-based label contradicts its content and sets a `label_warning`
-9. **Synthesizes outputs** to `findings/vectoreology_<timestamp>.md` and `.json`
-10. **Stores findings** in Qdrant collection `vectoreology_findings`
-11. **Supports query mode** to filter a JSON report by taxonomy axes without re-running the pipeline
-12. **Supports incremental runs** by stamping processed points and skipping them on later runs
-13. **Supports watch mode** for repeated excavation on a schedule
+9. **Caches reasoner findings** by deterministic topology fingerprint for repeat-run speedups
+10. **Writes in-progress artifacts** (`vectoreology_in_progress.md/.json`) while reasoning runs
+11. **Synthesizes outputs** to `findings/vectoreology_<timestamp>.md` and `.json`
+12. **Stores findings** in Qdrant collection `vectoreology_findings`
+13. **Supports query mode** to filter a JSON report by taxonomy axes without re-running the pipeline
+14. **Supports incremental runs** by stamping processed points and skipping them on later runs
+15. **Supports watch mode** for repeated excavation on a schedule
 
 ---
 
@@ -159,6 +167,13 @@ If no DeepSeek key is provided, topology and anomaly phases still run and reason
 # Enable adaptive DBSCAN parameter selection
 ./vectoreologist --collection my_collection --auto-tune-dbscan
 
+# Reasoner budget controls (profiles: fast, balanced, deep)
+./vectoreologist --collection my_collection --reasoner-profile fast
+./vectoreologist --collection my_collection --reasoner-profile deep --reasoner-max-bridges 40
+
+# Disable topology-fingerprint reasoner cache
+./vectoreologist --collection my_collection --reasoner-cache=false
+
 # Query an existing JSON report — no pipeline run
 ./vectoreologist --query-report findings/vectoreology_2026-05-04_10-00-00.json \
   --query-topic consciousness_philosophy --query-mismatch
@@ -167,7 +182,7 @@ If no DeepSeek key is provided, topology and anomaly phases still run and reason
 ./vectoreologist --version
 ```
 
-Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-cluster-size > 0`).
+Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-cluster-size > 0`, `--reasoner-max-* >= -1`).
 
 ### Flags
 
@@ -196,6 +211,11 @@ Invalid values are rejected early (`--sample >= 0`, `--batch-size > 0`, `--min-c
 | `--filter-degenerate` | `true` | Exclude density/coherence ≈ `1.0` null-content clusters from bridge + moat analysis |
 | `--auto-tune-dbscan` | `false` | Adapt DBSCAN `epsilon` and `minPts` from sampled pairwise distance statistics |
 | `--redis-url` | `redis://localhost:6379` | Redis URL for vector workspace; empty string disables it |
+| `--reasoner-profile` | `balanced` | Reasoning budget profile: `fast`, `balanced`, `deep` |
+| `--reasoner-max-clusters` | `-1` | Override max clusters sent to reasoner (`-1` = profile default, `0` = all) |
+| `--reasoner-max-bridges` | `-1` | Override max bridges sent to reasoner (`-1` = profile default, `0` = all) |
+| `--reasoner-max-moats` | `-1` | Override max moats sent to reasoner (`-1` = profile default, `0` = all) |
+| `--reasoner-cache` | `true` | Cache reasoner findings under `findings/.cache/reasoner/` by topology fingerprint |
 | `--query-report` | `""` | Path to a JSON report to query (pipeline does not run) |
 | `--query-topic` | `""` | Filter clusters by topic (e.g. `consciousness_philosophy`) |
 | `--query-mode` | `""` | Filter clusters by mode (e.g. `scholarly_annotation`) |
@@ -273,8 +293,10 @@ Per-axis confidence is `(best_score − runner_up_score) / best_score`. Overall 
 Each run emits:
 
 - Console phase progress and summary
-- Markdown report: `findings/vectoreology_<timestamp>.md`
-- JSON report: `findings/vectoreology_<timestamp>.json`
+- Incremental in-progress report updates while reasoning runs: `findings/vectoreology_in_progress.md` + `.json`
+- Final markdown report: `findings/vectoreology_<timestamp>.md`
+- Final JSON report: `findings/vectoreology_<timestamp>.json`
+- Optional reasoner cache artifact: `findings/.cache/reasoner/<topology-fingerprint>.json`
 - Qdrant findings upsert to collection `vectoreology_findings`
 - Point stamping payload `vectoreology_last_run=<RFC3339>` on processed source points (numeric + UUID IDs both supported via namespace-aware stamping)
 
@@ -316,6 +338,8 @@ Topology analysis is fully in-process — no Python subprocess, no OOM guards ne
 Redis workspace is enabled by default (`--redis-url redis://localhost:6379`). Extraction streams batches directly to Redis; only `MaxTopologyTotal` vectors are loaded into Go RAM for topology. Run `./scripts/start-redis.sh` to start a local Redis container. Pass `--redis-url ""` to disable if Redis is unavailable.
 
 Topology runs are deterministic by default (`--cluster-seed 42`) and can be randomized with `--cluster-seed 0`. Moat sensitivity is configurable with `--moat-threshold` (default `0.5`, raise for dense corpora). Degenerate null-content clusters (density/coherence ~1.0) are filtered from bridge/moat analysis by default (`--filter-degenerate=true`). Optional adaptive DBSCAN tuning is available via `--auto-tune-dbscan`, with parameter rationale exported in markdown/JSON diagnostics.
+
+Reasoning cost is tunable with `--reasoner-profile` (`fast`, `balanced`, `deep`) and granular `--reasoner-max-*` overrides (`-1` profile default, `0` all). Cached findings can be reused across equivalent topologies via `--reasoner-cache`.
 
 Use `--sample` to limit extraction size. Use `--sample-strategy diverse` for coverage-focused MaxMin sampling, or `--sample-strategy temporal` for recency-weighted time-window sampling when timestamps are present.
 

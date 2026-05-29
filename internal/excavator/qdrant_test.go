@@ -3,6 +3,7 @@ package excavator
 import (
 	"testing"
 
+	"github.com/meistro57/vectoreologist/internal/models"
 	qdrant "github.com/qdrant/go-client/qdrant"
 )
 
@@ -66,8 +67,15 @@ func TestExtractPoint_BasicVector(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("vector length: want 3, got %d", len(got))
 	}
-	if meta.ID != 42 {
-		t.Errorf("ID: want 42, got %d", meta.ID)
+	wantID := stablePointIDHash("num:42")
+	if meta.ID != wantID {
+		t.Errorf("ID: want %d, got %d", wantID, meta.ID)
+	}
+	if meta.RawPointID != "num:42" {
+		t.Errorf("RawPointID: want num:42, got %q", meta.RawPointID)
+	}
+	if meta.IDNamespace != idNamespaceNumeric {
+		t.Errorf("IDNamespace: want %q, got %q", idNamespaceNumeric, meta.IDNamespace)
 	}
 	if meta.Source != "mysource" {
 		t.Errorf("Source: want mysource, got %s", meta.Source)
@@ -185,16 +193,67 @@ func TestGetPayloadString_EmptyString(t *testing.T) {
 func TestPointIDToUint64_UUID(t *testing.T) {
 	id := qdrant.NewIDUUID("123e4567-e89b-12d3-a456-426614174000")
 	got := pointIDToUint64(id)
-	const want uint64 = 0x123e4567e89b12d3
+	want := stablePointIDHash("uuid:123e4567-e89b-12d3-a456-426614174000")
 	if got != want {
-		t.Fatalf("pointIDToUint64(UUID) = %d (0x%x), want %d (0x%x)", got, got, want, want)
+		t.Fatalf("pointIDToUint64(UUID) = %d, want %d", got, want)
 	}
 }
 
-func TestPointIDToUint64_InvalidUUIDReturnsZero(t *testing.T) {
+func TestPointIDToUint64_InvalidUUIDStillDeterministic(t *testing.T) {
 	id := qdrant.NewIDUUID("bad")
-	if got := pointIDToUint64(id); got != 0 {
-		t.Fatalf("pointIDToUint64(invalid UUID) = %d, want 0", got)
+	want := stablePointIDHash("uuid:bad")
+	if got := pointIDToUint64(id); got != want {
+		t.Fatalf("pointIDToUint64(invalid UUID) = %d, want %d", got, want)
+	}
+}
+
+func TestNormalizePointID_NumericNamespace(t *testing.T) {
+	normalized, raw, ns, ok := normalizePointID(qdrant.NewIDNum(99))
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if raw != "num:99" {
+		t.Fatalf("raw = %q", raw)
+	}
+	if ns != idNamespaceNumeric {
+		t.Fatalf("namespace = %q", ns)
+	}
+	if normalized != stablePointIDHash(raw) {
+		t.Fatalf("normalized mismatch")
+	}
+}
+
+func TestMetadataPointID_UUIDAndNumeric(t *testing.T) {
+	uuidMeta := models.VectorMetadata{RawPointID: "uuid:123e4567-e89b-12d3-a456-426614174000", IDNamespace: idNamespaceUUID}
+	numMeta := models.VectorMetadata{RawPointID: "num:77", IDNamespace: idNamespaceNumeric}
+	if got := metadataPointID(uuidMeta); got == nil || got.GetUuid() == "" {
+		t.Fatal("expected UUID point id")
+	}
+	if got := metadataPointID(numMeta); got == nil || got.GetNum() != 77 {
+		t.Fatal("expected numeric point id")
+	}
+}
+
+func TestAuditIDNormalization_DetectsIssues(t *testing.T) {
+	meta := []models.VectorMetadata{
+		{ID: stablePointIDHash("num:1"), RawPointID: "num:1", IDNamespace: idNamespaceNumeric},
+		{ID: stablePointIDHash("uuid:123e4567-e89b-12d3-a456-426614174000"), RawPointID: "uuid:123e4567-e89b-12d3-a456-426614174000", IDNamespace: idNamespaceUUID},
+		{ID: 123, RawPointID: "num:2", IDNamespace: idNamespaceNumeric},
+		{ID: 456, RawPointID: "uuid:not-a-uuid", IDNamespace: idNamespaceUUID},
+		{ID: 789},
+	}
+	audit := AuditIDNormalization(meta)
+	if audit.Total != 5 {
+		t.Fatalf("total = %d", audit.Total)
+	}
+	if audit.NonDeterministicID == 0 {
+		t.Fatal("expected nondeterministic IDs")
+	}
+	if audit.InvalidUUID == 0 {
+		t.Fatal("expected invalid uuid count")
+	}
+	if audit.MissingRawID == 0 || audit.MissingNamespace == 0 {
+		t.Fatal("expected missing raw/namespace counts")
 	}
 }
 

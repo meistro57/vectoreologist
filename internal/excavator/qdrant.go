@@ -2,11 +2,13 @@ package excavator
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/meistro57/vectoreologist/internal/models"
 	qdrant "github.com/qdrant/go-client/qdrant"
@@ -19,7 +21,12 @@ type Excavator struct {
 	vectorCombine bool
 }
 
-const maxMsgSize = 256 * 1024 * 1024 // 256 MB
+const maxMsgSize = 256 * 1024 * 1024
+
+const (
+	idNamespaceNumeric = "numeric"
+	idNamespaceUUID    = "uuid"
+)
 
 func New(rawURL, vectorName string, vectorCombine bool) *Excavator {
 	client, err := qdrant.NewClient(&qdrant.Config{
@@ -35,7 +42,6 @@ func New(rawURL, vectorName string, vectorCombine bool) *Excavator {
 	return &Excavator{client: client, vectorName: vectorName, vectorCombine: vectorCombine}
 }
 
-// CollectionSize returns the number of points in the named collection.
 func (e *Excavator) CollectionSize(name string) (uint64, error) {
 	info, err := e.client.GetCollectionInfo(context.Background(), name)
 	if err != nil {
@@ -44,8 +50,6 @@ func (e *Excavator) CollectionSize(name string) (uint64, error) {
 	return info.GetPointsCount(), nil
 }
 
-// StampPoints sets vectoreology_last_run on all extracted points so
-// subsequent --incremental runs can skip them.
 func (e *Excavator) StampPoints(collectionName string, ids []uint64, runID string) error {
 	if len(ids) == 0 {
 		return nil
@@ -82,8 +86,68 @@ func (e *Excavator) StampPoints(collectionName string, ids []uint64, runID strin
 	return nil
 }
 
-// ExtractIncremental pulls vectors that have NOT been stamped with
-// vectoreology_last_run. Uses IsEmpty filter so only unstamped points return.
+func (e *Excavator) StampMetadataPoints(collectionName string, metadata []models.VectorMetadata, runID string) error {
+	if len(metadata) == 0 {
+		return nil
+	}
+	pointIDs := make([]*qdrant.PointId, 0, len(metadata))
+	for _, m := range metadata {
+		if id := metadataPointID(m); id != nil {
+			pointIDs = append(pointIDs, id)
+		}
+	}
+	if len(pointIDs) == 0 {
+		return nil
+	}
+
+	ctx := context.Background()
+	const batch = 500
+	for start := 0; start < len(pointIDs); start += batch {
+		end := start + batch
+		if end > len(pointIDs) {
+			end = len(pointIDs)
+		}
+		_, err := e.client.SetPayload(ctx, &qdrant.SetPayloadPoints{
+			CollectionName: collectionName,
+			Payload: map[string]*qdrant.Value{
+				"vectoreology_last_run": qdrant.NewValueString(runID),
+			},
+			PointsSelector: &qdrant.PointsSelector{
+				PointsSelectorOneOf: &qdrant.PointsSelector_Points{
+					Points: &qdrant.PointsIdsList{Ids: pointIDs[start:end]},
+				},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("stamp metadata batch at %d: %w", start, err)
+		}
+	}
+	return nil
+}
+
+func metadataPointID(m models.VectorMetadata) *qdrant.PointId {
+	raw := strings.TrimSpace(m.RawPointID)
+	if strings.HasPrefix(raw, "uuid:") {
+		u := strings.TrimSpace(strings.TrimPrefix(raw, "uuid:"))
+		if u != "" {
+			return qdrant.NewIDUUID(u)
+		}
+	}
+	if strings.HasPrefix(raw, "num:") {
+		ns := strings.TrimSpace(strings.TrimPrefix(raw, "num:"))
+		if n, err := strconv.ParseUint(ns, 10, 64); err == nil {
+			return qdrant.NewIDNum(n)
+		}
+	}
+	if m.IDNamespace == idNamespaceUUID && raw != "" {
+		return qdrant.NewIDUUID(raw)
+	}
+	if m.ID != 0 {
+		return qdrant.NewIDNum(m.ID)
+	}
+	return nil
+}
+
 func (e *Excavator) ExtractIncremental(collectionName string, limit, batchSize int, strict bool, onBatch func(batchNum, fetched, target int)) ([][]float32, []models.VectorMetadata, error) {
 	ctx := context.Background()
 
@@ -93,7 +157,6 @@ func (e *Excavator) ExtractIncremental(collectionName string, limit, batchSize i
 	var nextOffset *qdrant.PointId
 	batchNum := 0
 
-	// must: field "vectoreology_last_run" is empty (not set on point).
 	filter := &qdrant.Filter{
 		Must: []*qdrant.Condition{
 			{
@@ -155,12 +218,6 @@ func (e *Excavator) ExtractIncremental(collectionName string, limit, batchSize i
 	return allVectors, allMetadata, nil
 }
 
-// Extract pulls up to limit vectors from a Qdrant collection using batched scrolling.
-// batchSize controls how many points are requested per scroll call.
-// When strict is true, any batch error aborts and returns an error; otherwise the
-// error is logged and extraction stops early with whatever was collected.
-// onBatch is called after each successful batch with (batchNum, fetched, target).
-// Pass nil to suppress progress callbacks.
 func (e *Excavator) Extract(collectionName string, limit, batchSize int, strict bool, onBatch func(batchNum, fetched, target int)) ([][]float32, []models.VectorMetadata, error) {
 	ctx := context.Background()
 
@@ -210,7 +267,7 @@ func (e *Excavator) Extract(collectionName string, limit, batchSize int, strict 
 		}
 
 		if len(points) == 0 || offset == nil {
-			break // collection exhausted
+			break
 		}
 		nextOffset = offset
 	}
@@ -218,8 +275,6 @@ func (e *Excavator) Extract(collectionName string, limit, batchSize int, strict 
 	return allVectors, allMetadata, nil
 }
 
-// extractPoint converts a RetrievedPoint into a vector and metadata.
-// Returns (vec, meta, true) on success; (nil, zero, false) if the point has no vector.
 func extractPoint(point *qdrant.RetrievedPoint, vectorName string, vectorCombine bool) ([]float32, models.VectorMetadata, bool) {
 	var vec []float32
 	if point == nil || point.Vectors == nil {
@@ -247,7 +302,6 @@ func extractPoint(point *qdrant.RetrievedPoint, vectorName string, vectorCombine
 		return nil, models.VectorMetadata{}, false
 	}
 
-	// Try multiple source field names to support different collection schemas
 	source := getPayloadString(point.Payload, "source", "")
 	if source == "" {
 		source = getPayloadString(point.Payload, "source_file", "")
@@ -259,18 +313,18 @@ func extractPoint(point *qdrant.RetrievedPoint, vectorName string, vectorCombine
 		source = getPayloadString(point.Payload, "source_id", "unknown")
 	}
 
-	// Build a rich fragment from available payload fields.
-	// For meta_reflections: prefer claims + concepts + echoes over bare summary.
-	// For mb_claims: use canonical_statement.
-	// For mb_chunks: use text.
 	fragment := buildFragment(point.Payload)
+	normalizedID, rawPointID, namespace, _ := normalizePointID(point.Id)
 
 	meta := models.VectorMetadata{
-		ID:       pointIDToUint64(point.Id),
-		Fragment: fragment,
-		Source:   source,
-		Layer:    getPayloadString(point.Payload, "layer", getPayloadString(point.Payload, "tone", "surface")),
-		RunID:    getPayloadString(point.Payload, "run_id", ""),
+		ID:          normalizedID,
+		RawPointID:  rawPointID,
+		IDNamespace: namespace,
+		Timestamp:   extractPointTimestamp(point.Payload),
+		Fragment:    fragment,
+		Source:      source,
+		Layer:       getPayloadString(point.Payload, "layer", getPayloadString(point.Payload, "tone", "surface")),
+		RunID:       getPayloadString(point.Payload, "run_id", ""),
 	}
 	return vec, meta, true
 }
@@ -312,40 +366,32 @@ func averageNamedVectors(named map[string]*qdrant.VectorOutput) []float32 {
 	return sum
 }
 
-// buildFragment assembles a text fragment from payload fields, preferring
-// rich structured data (claims, concepts, echoes) over bare summary/text.
-// This gives HDBSCAN and the reasoner diverse signal instead of identical summaries.
 func buildFragment(payload map[string]*qdrant.Value) string {
 	var parts []string
 
-	// Summary or canonical statement — the core single-line description.
 	if s := getPayloadString(payload, "canonical_statement", ""); s != "" {
 		parts = append(parts, s)
 	} else if s := getPayloadString(payload, "summary", ""); s != "" {
 		parts = append(parts, s)
 	}
 
-	// Claims — the most diverse and informative field in reflections.
 	if claims := getPayloadList(payload, "claims"); len(claims) > 0 {
 		for i, c := range claims {
 			if i >= 3 {
-				break // cap to keep fragment reasonable
+				break
 			}
 			parts = append(parts, c)
 		}
 	}
 
-	// Concepts — short noun phrases, great for clustering signal.
 	if concepts := getPayloadList(payload, "concepts"); len(concepts) > 0 {
 		parts = append(parts, "Concepts: "+joinMax(concepts, 6))
 	}
 
-	// Echoes — cross-tradition resonances.
 	if echoes := getPayloadList(payload, "echoes"); len(echoes) > 0 {
 		parts = append(parts, "Echoes: "+joinMax(echoes, 4))
 	}
 
-	// Questions — what the passage raises.
 	if questions := getPayloadList(payload, "questions"); len(questions) > 0 {
 		if len(questions) > 2 {
 			questions = questions[:2]
@@ -355,14 +401,11 @@ func buildFragment(payload map[string]*qdrant.Value) string {
 		}
 	}
 
-	// Tags from mb_claims.
 	if tags := getPayloadList(payload, "tags"); len(tags) > 0 {
 		parts = append(parts, "Tags: "+joinMax(tags, 6))
 	}
 
-	// Fallback to raw text field.
 	if len(parts) == 0 {
-		// misfit_reports: use report + verdict
 		if s := getPayloadString(payload, "report", ""); s != "" {
 			parts = append(parts, truncate(s, 300))
 		}
@@ -371,7 +414,6 @@ func buildFragment(payload map[string]*qdrant.Value) string {
 		}
 	}
 
-	// Final fallback to raw text field.
 	if len(parts) == 0 {
 		if s := getPayloadString(payload, "text", ""); s != "" {
 			return truncate(s, 500)
@@ -389,7 +431,6 @@ func buildFragment(payload map[string]*qdrant.Value) string {
 	return truncate(result, 500)
 }
 
-// getPayloadList extracts a string list from a Qdrant list value.
 func getPayloadList(payload map[string]*qdrant.Value, key string) []string {
 	val, ok := payload[key]
 	if !ok || val == nil {
@@ -397,7 +438,6 @@ func getPayloadList(payload map[string]*qdrant.Value, key string) []string {
 	}
 	list := val.GetListValue()
 	if list == nil {
-		// Might be a single string value.
 		if s := val.GetStringValue(); s != "" {
 			return []string{s}
 		}
@@ -412,7 +452,6 @@ func getPayloadList(payload map[string]*qdrant.Value, key string) []string {
 	return out
 }
 
-// joinMax joins up to n items with ", ".
 func joinMax(items []string, n int) string {
 	if len(items) > n {
 		items = items[:n]
@@ -427,7 +466,6 @@ func joinMax(items []string, n int) string {
 	return result
 }
 
-// truncate cuts a string to maxLen, appending "..." if truncated.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -435,34 +473,146 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// pointIDToUint64 converts a Qdrant PointId to uint64.
-// Numeric IDs pass through directly. UUID IDs are converted to a
-// deterministic uint64 using the first 8 bytes of the UUID.
-func pointIDToUint64(id *qdrant.PointId) uint64 {
+func normalizePointID(id *qdrant.PointId) (uint64, string, string, bool) {
 	if id == nil {
-		return 0
+		return 0, "", "", false
 	}
-	if n := id.GetNum(); n != 0 {
-		return n
+	uuid := strings.TrimSpace(id.GetUuid())
+	if uuid != "" {
+		raw := "uuid:" + strings.ToLower(uuid)
+		return stablePointIDHash(raw), raw, idNamespaceUUID, true
 	}
-	uuid := strings.ReplaceAll(id.GetUuid(), "-", "")
-	if len(uuid) < 16 {
-		return 0
-	}
-	bytes, err := hex.DecodeString(uuid[:16])
-	if err != nil || len(bytes) != 8 {
-		return 0
-	}
-
-	var out uint64
-	for _, b := range bytes {
-		out = (out << 8) | uint64(b)
-	}
-	return out
+	n := id.GetNum()
+	raw := "num:" + strconv.FormatUint(n, 10)
+	return stablePointIDHash(raw), raw, idNamespaceNumeric, true
 }
 
-// hostname strips the scheme and port from a URL, returning just the host.
-// The Qdrant gRPC client expects a bare hostname and manages its own port.
+func stablePointIDHash(raw string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(raw))
+	return h.Sum64()
+}
+
+func pointIDToUint64(id *qdrant.PointId) uint64 {
+	normalized, _, _, ok := normalizePointID(id)
+	if !ok {
+		return 0
+	}
+	return normalized
+}
+
+func extractPointTimestamp(payload map[string]*qdrant.Value) int64 {
+	keys := []string{"timestamp", "ts", "created_at", "updated_at", "date", "datetime", "time"}
+	for _, key := range keys {
+		val, ok := payload[key]
+		if !ok || val == nil {
+			continue
+		}
+		if n := val.GetIntegerValue(); n != 0 {
+			return normalizeUnixTimestamp(n)
+		}
+		if f := val.GetDoubleValue(); f != 0 {
+			return normalizeUnixTimestamp(int64(f))
+		}
+		if s := strings.TrimSpace(val.GetStringValue()); s != "" {
+			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return normalizeUnixTimestamp(n)
+			}
+			for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
+				if t, err := time.Parse(layout, s); err == nil {
+					return t.Unix()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func normalizeUnixTimestamp(v int64) int64 {
+	if v <= 0 {
+		return 0
+	}
+	if v > 1_000_000_000_000 {
+		return v / 1000
+	}
+	return v
+}
+
+type IDNormalizationAudit struct {
+	Total              int
+	NumericIDs         int
+	UUIDIDs            int
+	MissingRawID       int
+	MissingNamespace   int
+	InvalidUUID        int
+	HashCollisions     int
+	NonDeterministicID int
+}
+
+func (a IDNormalizationAudit) Summary() string {
+	return fmt.Sprintf(
+		"total=%d numeric=%d uuid=%d missing_raw=%d missing_namespace=%d invalid_uuid=%d collisions=%d nondeterministic=%d",
+		a.Total,
+		a.NumericIDs,
+		a.UUIDIDs,
+		a.MissingRawID,
+		a.MissingNamespace,
+		a.InvalidUUID,
+		a.HashCollisions,
+		a.NonDeterministicID,
+	)
+}
+
+func AuditIDNormalization(metadata []models.VectorMetadata) IDNormalizationAudit {
+	audit := IDNormalizationAudit{Total: len(metadata)}
+	seen := make(map[uint64]string, len(metadata))
+	for _, m := range metadata {
+		raw := strings.TrimSpace(m.RawPointID)
+		ns := strings.TrimSpace(m.IDNamespace)
+		if raw == "" {
+			audit.MissingRawID++
+		}
+		if ns == "" {
+			audit.MissingNamespace++
+		}
+		switch ns {
+		case idNamespaceNumeric:
+			audit.NumericIDs++
+		case idNamespaceUUID:
+			audit.UUIDIDs++
+			if !isUUIDRaw(raw) {
+				audit.InvalidUUID++
+			}
+		}
+		if raw != "" {
+			expected := stablePointIDHash(raw)
+			if expected != m.ID {
+				audit.NonDeterministicID++
+			}
+		}
+		if prev, ok := seen[m.ID]; ok && raw != "" && prev != raw {
+			audit.HashCollisions++
+		} else if raw != "" {
+			seen[m.ID] = raw
+		}
+	}
+	return audit
+}
+
+func isUUIDRaw(raw string) bool {
+	raw = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(raw)), "uuid:")
+	stripped := strings.ReplaceAll(raw, "-", "")
+	if len(stripped) != 32 {
+		return false
+	}
+	for _, c := range stripped {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func hostname(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err == nil && u.Hostname() != "" {

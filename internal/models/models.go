@@ -2,11 +2,14 @@ package models
 
 // VectorMetadata holds excavated metadata from Qdrant points
 type VectorMetadata struct {
-	ID       uint64
-	Fragment string
-	Source   string
-	Layer    string
-	RunID    string
+	ID          uint64
+	RawPointID  string
+	IDNamespace string
+	Timestamp   int64
+	Fragment    string
+	Source      string
+	Layer       string
+	RunID       string
 }
 
 // TaxonomyLabel is the multi-axis knowledge classification for a cluster,
@@ -65,6 +68,7 @@ type Finding struct {
 	Subject        string
 	ReasoningChain string
 	Confidence     float64
+	ConfidenceBand string
 	IsAnomaly      bool
 	Clusters       []int
 	// Structured anomaly fields — populated by the anomaly detector for new anomaly types.

@@ -441,3 +441,43 @@ func TestL2Normalise_UnitLength(t *testing.T) {
 		}
 	}
 }
+
+func TestAnalyzeClusters_HybridLabelAndSource(t *testing.T) {
+	top := New()
+	top.SetClusterParams(2, 0.4)
+	vecs := [][]float32{
+		{1, 0, 0},
+		{0.99, 0.01, 0},
+		{0.98, 0.02, 0},
+	}
+	meta := []models.VectorMetadata{
+		{ID: 1, Source: "mb_docs", Layer: "deep", RunID: "run-a", Fragment: "Hermetic law of correspondence in practice"},
+		{ID: 2, Source: "mb_docs", Layer: "deep", RunID: "run-a", Fragment: "Mental transmutation through disciplined will"},
+		{ID: 3, Source: "mb_docs", Layer: "deep", RunID: "run-a", Fragment: "As above so below reflection"},
+	}
+	clusters := top.AnalyzeClusters(vecs, meta)
+	if len(clusters) != 1 {
+		t.Fatalf("want 1 cluster, got %d", len(clusters))
+	}
+	if clusters[0].Source != "deep / mb_docs" {
+		t.Fatalf("source label = %q", clusters[0].Source)
+	}
+	if clusters[0].Label == "" || clusters[0].Label == clusters[0].Source {
+		t.Fatalf("hybrid label should differ from source-only label, got %q", clusters[0].Label)
+	}
+}
+
+func TestAnalyzeClusters_AutoTuneFallbackDiagnostics(t *testing.T) {
+	top := New()
+	top.SetAutoTune(true)
+	vecs := [][]float32{{1, 0}, {0, 1}, {1, 1}}
+	meta := []models.VectorMetadata{{ID: 1}, {ID: 2}, {ID: 3}}
+	_ = top.AnalyzeClusters(vecs, meta)
+	diag := top.LastDiagnostics()
+	if !diag.FallbackUsed {
+		t.Fatal("expected fallback diagnostics for small sample")
+	}
+	if diag.ChosenEps != 0.3 {
+		t.Fatalf("fallback epsilon = %.3f, want 0.3", diag.ChosenEps)
+	}
+}

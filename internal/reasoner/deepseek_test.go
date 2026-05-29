@@ -80,6 +80,32 @@ func TestCallDeepSeek_SuccessWithoutReasoningContent(t *testing.T) {
 	}
 }
 
+func TestCallDeepSeek_StreamedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"step \",\"content\":\"final \"}}]}\n\n"))
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"trace\",\"content\":\"answer\"}}]}\n\n"))
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	r := New2(srv.URL, "test-key", "deepseek-chat")
+	resp, err := r.callDeepSeek("test prompt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !resp.streamed {
+		t.Fatal("expected streamed response")
+	}
+	if resp.thinking != "step trace" {
+		t.Fatalf("thinking mismatch: %q", resp.thinking)
+	}
+	if resp.conclusion != "final answer" {
+		t.Fatalf("conclusion mismatch: %q", resp.conclusion)
+	}
+}
+
 func TestCallDeepSeek_MalformedJSON(t *testing.T) {
 	srv := newTestServer(t, 200, `this is not json {{{`)
 	defer srv.Close()

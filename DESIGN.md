@@ -52,7 +52,12 @@ For each bridge: "Why are these domains connected?"
 For each moat: "Why is there no connection?"
 ```
 
-Live console output can show model thinking, but report artifacts store final-facing conclusions only.
+Reasoning now supports runtime/cost controls:
+- Streamed model output in CLI (`text/event-stream` path)
+- Budget profiles (`fast`, `balanced`, `deep`) + explicit `--reasoner-max-*` overrides
+- Deterministic topology-fingerprint cache for finding reuse across equivalent runs
+
+Live console output can show streamed model output, while report artifacts still store final-facing conclusions only.
 
 ### Phase 4: Anomaly Detection
 ```
@@ -62,12 +67,16 @@ Live console output can show model thinking, but report artifacts store final-fa
 - Source contradictions (consensus across opposing sources)
 ```
 
+Anomaly confidence now uses calibrated banding (percentile baseline blended with z-style tail emphasis) to make severity ordering more stable across heterogeneous cluster populations.
+
 ### Phase 5: Synthesis
 ```
 Findings + Topology + Metadata → Evidence-gated Markdown + Structured JSON + Qdrant Storage
 ```
 
 Reports written to `findings/` with timestamped filenames.
+
+During reasoning, synthesis can also emit `vectoreology_in_progress.md/.json` snapshots for long-running observability.
 
 Synthesis emits diagnostics-first sections:
 - Executive Summary (`duplicate_heavy_clusters`, `oversampled_clusters`, `skipped_bridges`)
@@ -153,6 +162,7 @@ Use cluster labels to annotate raw vectors in the source collection.
 - **Cap**: `MaxTopologyTotal = 20,000` — input is random-sampled before PCA runs
 - **Redis workspace**: enabled by default (`redis://localhost:6379`); keeps Go heap at O(batch_size) during extraction; only `MaxTopologyTotal` vectors are loaded into RAM for topology
 - **Determinism**: default seed `42` keeps subsampling and bridge sample links reproducible across runs
+- **Reasoning controls**: budget profiles and `--reasoner-max-*` reduce API calls on large topologies; topology fingerprint cache reuses findings when inputs are equivalent
 
 ## Dependencies
 

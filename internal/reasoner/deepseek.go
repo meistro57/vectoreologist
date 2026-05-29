@@ -1,12 +1,12 @@
 package reasoner
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -19,10 +19,12 @@ const (
 )
 
 type Reasoner struct {
-	apiURL string
-	apiKey string
-	model  string
-	client *http.Client
+	apiURL         string
+	apiKey         string
+	model          string
+	client         *http.Client
+	budget         ReasoningBudget
+	findingHandler func(models.Finding, int, int)
 }
 
 func New(apiURL, apiKey string) *Reasoner {
@@ -35,6 +37,7 @@ func New2(apiURL, apiKey, model string) *Reasoner {
 		apiKey: apiKey,
 		model:  model,
 		client: &http.Client{Timeout: callTimeout},
+		budget: BudgetForProfile("balanced"),
 	}
 }
 
@@ -49,25 +52,17 @@ func (r *Reasoner) ReasonAboutTopology(
 	metadata []models.VectorMetadata,
 ) []models.Finding {
 	findings := []models.Finding{}
-	total := len(clusters)
+	selectedClusters := applyClusterBudget(clusters, r.budget.MaxClusters)
+	selectedBridges := applyBridgeBudget(bridges, r.budget.MaxBridges)
+	selectedMoats := applyMoatBudget(moats, r.budget.MaxMoats)
+	total := len(selectedClusters) + len(selectedBridges) + len(selectedMoats)
 
-	// Build a fast lookup from vector ID → text fragment.
 	byID := make(map[uint64]string, len(metadata))
 	for _, m := range metadata {
 		if m.Fragment != "" && m.Fragment != "N/A" {
 			byID[m.ID] = m.Fragment
 		}
 	}
-
-	sort.Slice(bridges, func(i, j int) bool { return bridges[i].Strength > bridges[j].Strength })
-	if len(bridges) > 10 {
-		bridges = bridges[:10]
-	}
-	sort.Slice(moats, func(i, j int) bool { return moats[i].Distance > moats[j].Distance })
-	if len(moats) > 5 {
-		moats = moats[:5]
-	}
-	total += len(bridges) + len(moats)
 
 	done := 0
 
@@ -80,7 +75,7 @@ func (r *Reasoner) ReasonAboutTopology(
 
 	// Clusters
 	firstPromptPrinted := false
-	for _, cluster := range clusters {
+	for _, cluster := range selectedClusters {
 		done++
 		subject := fmt.Sprintf("Cluster %d: %s", cluster.ID, cluster.Label)
 		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
@@ -90,13 +85,15 @@ func (r *Reasoner) ReasonAboutTopology(
 			fmt.Printf("\n\n--- R1 prompt (cluster %d) ---\n%s\n--- end prompt ---\n\n", cluster.ID, prompt)
 			firstPromptPrinted = true
 		}
-		resp, err := r.callDeepSeek(prompt)
+		resp, err := r.callDeepSeekWithSubject(subject, prompt)
 		if err != nil {
 			fmt.Printf("\n   Warning: cluster %d: %v\n", cluster.ID, err)
 			continue
 		}
-		logThinking(subject, resp.thinking)
-		findings = append(findings, models.Finding{
+		if !resp.streamed {
+			logThinking(subject, resp.thinking)
+		}
+		finding := models.Finding{
 			Type:           "cluster_analysis",
 			Subject:        subject,
 			ReasoningChain: formatForReport(resp),
@@ -104,47 +101,63 @@ func (r *Reasoner) ReasonAboutTopology(
 			Confidence:     0.75,
 			IsAnomaly:      cluster.Coherence < 0.5,
 			Clusters:       []int{cluster.ID},
-		})
+		}
+		findings = append(findings, finding)
+		if r.findingHandler != nil {
+			r.findingHandler(finding, done, total)
+		}
 	}
 
 	// Top bridges
-	for _, bridge := range bridges {
+	for _, bridge := range selectedBridges {
 		done++
 		subject := fmt.Sprintf("Bridge: %d ↔ %d", bridge.ClusterA, bridge.ClusterB)
 		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
 		aSnips, bSnips := bridgeSnippets(bridge, byID, 4)
-		resp, err := r.callDeepSeek(buildBridgePrompt(bridge, aSnips, bSnips))
+		resp, err := r.callDeepSeekWithSubject(subject, buildBridgePrompt(bridge, aSnips, bSnips))
 		if err != nil {
 			continue
 		}
-		logThinking(subject, resp.thinking)
-		findings = append(findings, models.Finding{
+		if !resp.streamed {
+			logThinking(subject, resp.thinking)
+		}
+		finding := models.Finding{
 			Type:           "bridge_analysis",
 			Subject:        subject,
 			ReasoningChain: formatForReport(resp),
 			Evidence:       encodeBridgeEvidence(aSnips, bSnips),
 			Confidence:     0.75,
 			Clusters:       []int{bridge.ClusterA, bridge.ClusterB},
-		})
+		}
+		findings = append(findings, finding)
+		if r.findingHandler != nil {
+			r.findingHandler(finding, done, total)
+		}
 	}
 
 	// Top moats
-	for _, moat := range moats {
+	for _, moat := range selectedMoats {
 		done++
 		subject := fmt.Sprintf("Moat: %d ⊥ %d", moat.ClusterA, moat.ClusterB)
 		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
-		resp, err := r.callDeepSeek(buildMoatPrompt(moat))
+		resp, err := r.callDeepSeekWithSubject(subject, buildMoatPrompt(moat))
 		if err != nil {
 			continue
 		}
-		logThinking(subject, resp.thinking)
-		findings = append(findings, models.Finding{
+		if !resp.streamed {
+			logThinking(subject, resp.thinking)
+		}
+		finding := models.Finding{
 			Type:           "moat_analysis",
 			Subject:        subject,
 			ReasoningChain: formatForReport(resp),
 			Confidence:     0.75,
 			IsAnomaly:      true,
-		})
+		}
+		findings = append(findings, finding)
+		if r.findingHandler != nil {
+			r.findingHandler(finding, done, total)
+		}
 	}
 
 	fmt.Printf("\r   ✓ reasoning complete (%d/%d)                              \n", done, total)
@@ -154,15 +167,21 @@ func (r *Reasoner) ReasonAboutTopology(
 type deepSeekResponse struct {
 	thinking   string
 	conclusion string
+	streamed   bool
 }
 
 func (r *Reasoner) callDeepSeek(prompt string) (*deepSeekResponse, error) {
+	return r.callDeepSeekWithSubject("", prompt)
+}
+
+func (r *Reasoner) callDeepSeekWithSubject(subject, prompt string) (*deepSeekResponse, error) {
 	reqBody := map[string]interface{}{
 		"model": r.model,
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
 		"temperature": 0,
+		"stream":      true,
 	}
 
 	jsonData, err := json.Marshal(reqBody)
@@ -182,32 +201,127 @@ func (r *Reasoner) callDeepSeek(prompt string) (*deepSeekResponse, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("deepseek API error %s", resp.Status)
+		}
+		return nil, fmt.Errorf("deepseek API error %s: %s", resp.Status, string(body))
+	}
+
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		streamed, err := r.readStreamedResponse(resp.Body, subject)
+		if err != nil {
+			return nil, err
+		}
+		return streamed, nil
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("deepseek API error %s: %s", resp.Status, string(body))
-	}
+	return parseJSONResponse(body)
+}
 
-	var result map[string]interface{}
+func parseJSONResponse(body []byte) (*deepSeekResponse, error) {
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("bad JSON response: %w", err)
 	}
-
-	choices, ok := result["choices"].([]interface{})
-	if !ok || len(choices) == 0 {
+	if len(result.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in response: %s", string(body))
 	}
-	msg, ok := choices[0].(map[string]interface{})["message"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("unexpected message format")
+	return &deepSeekResponse{
+		thinking:   result.Choices[0].Message.ReasoningContent,
+		conclusion: result.Choices[0].Message.Content,
+		streamed:   false,
+	}, nil
+}
+
+func (r *Reasoner) readStreamedResponse(body io.Reader, subject string) (*deepSeekResponse, error) {
+	type streamChunk struct {
+		Choices []struct {
+			Delta struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"delta"`
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
 	}
 
-	conclusion, _ := msg["content"].(string)
-	thinking, _ := msg["reasoning_content"].(string)
-
-	return &deepSeekResponse{thinking: thinking, conclusion: conclusion}, nil
+	var thinking strings.Builder
+	var conclusion strings.Builder
+	streamPrinted := false
+	reader := bufio.NewReader(body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return nil, fmt.Errorf("read stream: %w", err)
+		}
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "data:") {
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if payload == "[DONE]" {
+				break
+			}
+			if payload != "" {
+				var chunk streamChunk
+				if unmarshalErr := json.Unmarshal([]byte(payload), &chunk); unmarshalErr == nil && len(chunk.Choices) > 0 {
+					thinkingDelta := chunk.Choices[0].Delta.ReasoningContent
+					conclusionDelta := chunk.Choices[0].Delta.Content
+					if thinkingDelta == "" && conclusionDelta == "" {
+						thinkingDelta = chunk.Choices[0].Message.ReasoningContent
+						conclusionDelta = chunk.Choices[0].Message.Content
+					}
+					if thinkingDelta != "" {
+						thinking.WriteString(thinkingDelta)
+						if subject != "" {
+							if !streamPrinted {
+								fmt.Printf("\n\n   --- stream: %s ---\n", subject)
+								streamPrinted = true
+							}
+							fmt.Print(thinkingDelta)
+						}
+					}
+					if conclusionDelta != "" {
+						conclusion.WriteString(conclusionDelta)
+						if subject != "" {
+							if !streamPrinted {
+								fmt.Printf("\n\n   --- stream: %s ---\n", subject)
+								streamPrinted = true
+							}
+							fmt.Print(conclusionDelta)
+						}
+					}
+				}
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+	if streamPrinted {
+		fmt.Printf("\n   --- end stream ---\n")
+	}
+	if strings.TrimSpace(thinking.String()) == "" && strings.TrimSpace(conclusion.String()) == "" {
+		return nil, fmt.Errorf("empty streamed response")
+	}
+	return &deepSeekResponse{
+		thinking:   thinking.String(),
+		conclusion: conclusion.String(),
+		streamed:   true,
+	}, nil
 }
 
 // formatForReport keeps only final-facing model output.

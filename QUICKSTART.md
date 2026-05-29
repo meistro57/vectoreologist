@@ -1,5 +1,11 @@
 # Vectoreologist Quickstart
 
+## New in this release
+
+- **Higher analysis quality**: adaptive DBSCAN diagnostics, improved hybrid label promotion, and calibrated anomaly confidence bands in report output.
+- **Lower reasoning cost**: streamed DeepSeek output, reasoner budget profiles/overrides, deterministic topology-fingerprint cache, and in-progress report artifacts.
+- **New controls**: `--reasoner-profile`, `--reasoner-max-clusters`, `--reasoner-max-bridges`, `--reasoner-max-moats`, `--reasoner-cache`.
+
 ## 1. Prerequisites
 
 **Go 1.23+**
@@ -98,10 +104,12 @@ make run-collection COLLECTION=my_collection
    ✓ Found 0 source contradictions
 
 🧠 Phase 4: DeepSeek R1 Reasoning
+   ✓ Reasoner budget: profile=balanced clusters=all bridges=10 moats=5
    reasoning 1/32: Cluster 1: surface / my_collection ...
-   --- thinking: Cluster 1: surface / my_collection ---
-   ...live model reasoning output...
-   ---
+   --- stream: Cluster 1: surface / my_collection ---
+   ...live model output...
+   --- end stream ---
+   ↳ In-progress report: findings/vectoreology_in_progress.md (3/32)
    ✓ reasoning complete (32/32)
 
 📝 Phase 5: Synthesis & Storage
@@ -121,7 +129,7 @@ Read full analysis: findings/vectoreology_2026-04-14_21-27-41.md
 
 **Noise vectors**: DBSCAN naturally excludes outliers that don't belong to any cluster — these are reported but not analysed further.
 
-**Phase 4 speed**: DeepSeek R1 (`deepseek-reasoner`) reasons about every cluster + the top 10 bridges + top 5 moats. Each call can take 20–90 seconds. Use `--deepseek-model deepseek-chat` for fast mode. Chain-of-thought may appear in live console logs, but markdown/JSON store final-facing output only.
+**Phase 4 speed**: default `--reasoner-profile balanced` reasons about all clusters + top 10 bridges + top 5 moats. Use `--reasoner-profile fast` to cap work (`12/4/2`) or `--reasoner-profile deep` for broader bridge/moat coverage (`all/25/12`). Fine-tune with `--reasoner-max-*` (`-1` = profile default, `0` = all). Chain-of-thought/live output may appear in the console stream, but markdown/JSON store final-facing output only.
 
 ### Markdown Report
 
@@ -142,7 +150,24 @@ Open `findings/vectoreology_*.md` to see:
 
 ### Full R1 deep dive on a small collection
 ```bash
-./vectoreologist --collection my_collection --sample 100
+./vectoreologist --collection my_collection --sample 100 --reasoner-profile deep
+```
+
+### Cost-controlled reasoning pass
+```bash
+./vectoreologist --collection my_collection --reasoner-profile fast
+./vectoreologist --collection my_collection --reasoner-profile balanced --reasoner-max-bridges 6 --reasoner-max-moats 3
+```
+
+### Warm cache, then rerun quickly on unchanged topology
+```bash
+./vectoreologist --collection my_collection --reasoner-cache=true
+./vectoreologist --collection my_collection --reasoner-cache=true
+```
+
+### Disable reasoner cache
+```bash
+./vectoreologist --collection my_collection --reasoner-cache=false
 ```
 
 ### Compare two collections
@@ -236,8 +261,9 @@ Redis is enabled by default. Either start the container or disable Redis:
 ```
 
 ### Phase 4 hangs / times out
-Each R1 call has a 5-minute timeout. For large cluster counts use fast mode:
+Each R1 call has a 5-minute timeout. Reduce reasoner budget first, then switch model if needed:
 ```bash
+./vectoreologist --collection my_collection --reasoner-profile fast
 ./vectoreologist --collection my_collection --deepseek-model deepseek-chat
 ```
 
@@ -266,3 +292,5 @@ Use valid numeric bounds:
 6. Try `--sample-strategy temporal` for recency-aware time-window sampling
 7. Raise `--moat-threshold` for dense corpora where clusters share baseline vocabulary
 8. Use `--cluster-seed 0` when you want stochastic topology runs
+9. Tune reasoner spend with `--reasoner-profile` and `--reasoner-max-*`
+10. Keep `--reasoner-cache=true` for repeat runs on stable topologies

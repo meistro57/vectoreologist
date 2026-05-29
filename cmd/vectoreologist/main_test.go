@@ -299,6 +299,9 @@ func TestValidateConfig(t *testing.T) {
 		{name: "zero batch", cfg: config{sampleSize: 0, batchSize: 0, minClusterSize: 5, minSamples: 3}, wantErr: "--batch-size"},
 		{name: "nonpositive min cluster size", cfg: config{sampleSize: 0, batchSize: 100, minClusterSize: 0, minSamples: 3}, wantErr: "--min-cluster-size"},
 		{name: "nonpositive min samples", cfg: config{sampleSize: 0, batchSize: 100, minClusterSize: 5, minSamples: 0}, wantErr: "--min-samples"},
+		{name: "invalid reasoner clusters", cfg: config{sampleSize: 0, batchSize: 100, minClusterSize: 5, minSamples: 3, maxReasonerClusters: -2}, wantErr: "--reasoner-max-clusters"},
+		{name: "invalid reasoner bridges", cfg: config{sampleSize: 0, batchSize: 100, minClusterSize: 5, minSamples: 3, maxReasonerBridges: -2}, wantErr: "--reasoner-max-bridges"},
+		{name: "invalid reasoner moats", cfg: config{sampleSize: 0, batchSize: 100, minClusterSize: 5, minSamples: 3, maxReasonerMoats: -2}, wantErr: "--reasoner-max-moats"},
 	}
 
 	for _, tc := range cases {

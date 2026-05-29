@@ -62,14 +62,20 @@ type reportDiagnostics struct {
 	skippedBridges         int
 }
 
+type topologyDiagnostics struct {
+	subject string
+	reason  string
+}
+
 type reportArtifact struct {
-	data            reportData
-	clusterSections []clusterSection
-	bridgeSections  []bridgeSection
-	attractors      []semanticAttractor
-	reviewItems     []string
-	recommendations []string
-	diagnostics     reportDiagnostics
+	data              reportData
+	clusterSections   []clusterSection
+	bridgeSections    []bridgeSection
+	attractors        []semanticAttractor
+	reviewItems       []string
+	recommendations   []string
+	diagnostics       reportDiagnostics
+	topologyDiagnostics topologyDiagnostics
 }
 
 func buildReportArtifact(data reportData) reportArtifact {
@@ -90,13 +96,14 @@ func buildReportArtifact(data reportData) reportArtifact {
 	}
 
 	return reportArtifact{
-		data:            data,
-		clusterSections: clusterSections,
-		bridgeSections:  bridgeSections,
-		attractors:      renderSemanticAttractors(clusterSections, bridgeSections),
-		reviewItems:     recommendedReviewItems(clusterSections, bridgeSections),
-		recommendations: buildRecommendations(clusterSections, bridgeSections),
-		diagnostics:     summarizeDiagnostics(clusterSections, bridgeSections),
+		data:                data,
+		clusterSections:     clusterSections,
+		bridgeSections:      bridgeSections,
+		attractors:          renderSemanticAttractors(clusterSections, bridgeSections),
+		reviewItems:         recommendedReviewItems(clusterSections, bridgeSections),
+		recommendations:     buildRecommendations(clusterSections, bridgeSections),
+		diagnostics:         summarizeDiagnostics(clusterSections, bridgeSections),
+		topologyDiagnostics: extractTopologyDiagnostics(data.findings),
 	}
 }
 
@@ -108,7 +115,7 @@ func renderMarkdown(artifact reportArtifact) string {
 	data := artifact.data
 	var sb strings.Builder
 	sb.WriteString("# Vectoreology Report\n\n")
-	sb.WriteString(renderExecutiveSummary(data, artifact.diagnostics, artifact.attractors, artifact.reviewItems))
+	sb.WriteString(renderExecutiveSummary(data, artifact.diagnostics, artifact.attractors, artifact.reviewItems, artifact.topologyDiagnostics))
 	sb.WriteString("## Cluster Analysis\n\n")
 	for _, section := range artifact.clusterSections {
 		sb.WriteString(renderClusterMarkdown(section))
@@ -151,7 +158,7 @@ func renderMarkdown(artifact reportArtifact) string {
 	return sb.String()
 }
 
-func renderExecutiveSummary(data reportData, diagnostics reportDiagnostics, attractors []semanticAttractor, reviewItems []string) string {
+func renderExecutiveSummary(data reportData, diagnostics reportDiagnostics, attractors []semanticAttractor, reviewItems []string, topo topologyDiagnostics) string {
 	var sb strings.Builder
 	sb.WriteString("## Executive Summary\n\n")
 	sb.WriteString(fmt.Sprintf("- Total clusters: %d\n", len(data.clusters)))
@@ -159,8 +166,14 @@ func renderExecutiveSummary(data reportData, diagnostics reportDiagnostics, attr
 	sb.WriteString(fmt.Sprintf("- Total moats: %d\n", len(data.moats)))
 	sb.WriteString(fmt.Sprintf("- Duplicate-heavy clusters: %d\n", diagnostics.duplicateHeavyClusters))
 	sb.WriteString(fmt.Sprintf("- Source-oversampled clusters: %d\n", diagnostics.overSampledClusters))
-	sb.WriteString(fmt.Sprintf("- Bridge interpretations skipped (insufficient evidence): %d\n\n", diagnostics.skippedBridges))
-
+	sb.WriteString(fmt.Sprintf("- Bridge interpretations skipped (insufficient evidence): %d\n", diagnostics.skippedBridges))
+	if strings.TrimSpace(topo.subject) != "" {
+		sb.WriteString(fmt.Sprintf("- DBSCAN diagnostics: %s\n", topo.subject))
+		if strings.TrimSpace(topo.reason) != "" {
+			sb.WriteString(fmt.Sprintf("- DBSCAN rationale: %s\n", topo.reason))
+		}
+	}
+	sb.WriteString("\n")
 	sb.WriteString("Top 3 strongest semantic attractors across the corpus:\n")
 	for i := 0; i < min(3, len(attractors)); i++ {
 		sb.WriteString(fmt.Sprintf("%d. %s (%.2f)\n", i+1, attractors[i].name, attractors[i].confidence))
@@ -489,11 +502,11 @@ func generateSuggestedLabel(cluster models.Cluster, snippets []string, finalConc
 			return label
 		}
 	}
-	if len(snippets) > 0 {
-		return titleFromSnippet(snippets[0])
-	}
 	if cluster.Label != "" {
 		return sanitizeConceptLabel(cluster.Label)
+	}
+	if len(snippets) > 0 {
+		return titleFromSnippet(snippets[0])
 	}
 	if cluster.Source != "" {
 		return sanitizeConceptLabel(cluster.Source)
@@ -807,6 +820,15 @@ func representativeSnippets(cluster models.Cluster, metadataByID map[uint64]mode
 	return out
 }
 
+func extractTopologyDiagnostics(findings []models.Finding) topologyDiagnostics {
+	for _, finding := range findings {
+		if finding.Type == "topology_diagnostics" {
+			return topologyDiagnostics{subject: finding.Subject, reason: finding.ReasoningChain}
+		}
+	}
+	return topologyDiagnostics{}
+}
+
 func clusterFindingsByID(findings []models.Finding) map[int]models.Finding {
 	out := map[int]models.Finding{}
 	for _, finding := range findings {
@@ -856,6 +878,9 @@ func anomalyFlagsByCluster(findings []models.Finding) map[int][]string {
 			label := finding.AnomalyType
 			if label == "" {
 				label = finding.Type
+			}
+			if finding.ConfidenceBand != "" {
+				label = fmt.Sprintf("%s (%s %.2f)", label, finding.ConfidenceBand, finding.Confidence)
 			}
 			out[clusterID] = append(out[clusterID], label)
 		}

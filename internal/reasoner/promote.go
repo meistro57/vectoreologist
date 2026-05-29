@@ -26,6 +26,7 @@ func ExtractConclusionLabel(reasoningChain string) string {
 	}
 	text = stripMarkdown(text)
 	text = strings.TrimSpace(text)
+	text = conciseClusterLabel(text)
 	if len(text) > 80 {
 		text = text[:77] + "..."
 	}
@@ -37,6 +38,35 @@ func stripMarkdown(s string) string {
 		s = strings.ReplaceAll(s, tok, "")
 	}
 	return s
+}
+
+func conciseClusterLabel(s string) string {
+	cleaned := strings.TrimSpace(s)
+	if cleaned == "" {
+		return ""
+	}
+	prefixes := []string{
+		"this cluster represents ",
+		"the cluster represents ",
+		"this cluster captures ",
+		"the cluster captures ",
+		"this cluster centers on ",
+		"the cluster centers on ",
+		"this cluster is about ",
+		"the cluster is about ",
+		"this cluster focuses on ",
+		"the cluster focuses on ",
+		"this cluster describes ",
+		"the cluster describes ",
+	}
+	lower := strings.ToLower(cleaned)
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			cleaned = strings.TrimSpace(cleaned[len(prefix):])
+			break
+		}
+	}
+	return strings.Trim(cleaned, " .,:;!-\"'")
 }
 
 // PromoteClusterLabels promotes each cluster's Label to the first sentence of
@@ -66,7 +96,9 @@ func PromoteClusterLabels(findings []models.Finding, clusters []models.Cluster) 
 		if label == "" {
 			continue
 		}
-		out[i].Source = c.Label
+		if out[i].Source == "" {
+			out[i].Source = c.Label
+		}
 		out[i].Label = label
 	}
 	return out

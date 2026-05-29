@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -28,27 +29,33 @@ import (
 var version = "dev"
 
 type config struct {
-	collection     string
-	sampleSize     int
-	batchSize      int
-	strict         bool
-	vectorName     string
-	vectorCombine  bool
-	outputPath     string
-	qdrantURL      string
-	deepseekKey    string
-	deepseekURL    string
-	deepseekModel  string
-	sampleStrategy string
-	semanticLabels bool
-	incremental    bool
-	minClusterSize int
-	minSamples     int // no-op; kept for backwards CLI compatibility
-	redisURL          string
-	epsilon           float64
-	clusterSeed       int64
-	moatThreshold     float64
-	filterDegenerate  bool
+	collection          string
+	sampleSize          int
+	batchSize           int
+	strict              bool
+	vectorName          string
+	vectorCombine       bool
+	outputPath          string
+	qdrantURL           string
+	deepseekKey         string
+	deepseekURL         string
+	deepseekModel       string
+	sampleStrategy      string
+	semanticLabels      bool
+	incremental         bool
+	minClusterSize      int
+	minSamples          int // no-op; kept for backwards CLI compatibility
+	redisURL            string
+	epsilon             float64
+	clusterSeed         int64
+	moatThreshold       float64
+	filterDegenerate    bool
+	autoTuneDBSCAN      bool
+	reasonerProfile     string
+	maxReasonerClusters int
+	maxReasonerBridges  int
+	maxReasonerMoats    int
+	reasonerCache       bool
 	// Query flags — when any is set, the pipeline does not run; instead a JSON
 	// report file is read and filtered results are printed.
 	queryReport   string
@@ -97,7 +104,23 @@ func validateConfig(cfg config) error {
 	if cfg.minSamples <= 0 {
 		return fmt.Errorf("--min-samples must be > 0")
 	}
+	if cfg.maxReasonerClusters < -1 {
+		return fmt.Errorf("--reasoner-max-clusters must be >= -1")
+	}
+	if cfg.maxReasonerBridges < -1 {
+		return fmt.Errorf("--reasoner-max-bridges must be >= -1")
+	}
+	if cfg.maxReasonerMoats < -1 {
+		return fmt.Errorf("--reasoner-max-moats must be >= -1")
+	}
 	return nil
+}
+
+func budgetLimitLabel(limit int) string {
+	if limit <= 0 {
+		return "all"
+	}
+	return fmt.Sprintf("%d", limit)
 }
 
 // runOnce executes the full excavation pipeline and returns the report path.
@@ -208,7 +231,9 @@ func runOnce(cfg config) (string, error) {
 
 	sampler := excavator.NewSampler(sampleStrat, time.Now().Unix())
 	vectors, metadata = sampler.Sample(vectors, metadata, cfg.sampleSize)
-	fmt.Printf("   ✓ Total extracted: %d vectors with metadata\n\n", len(vectors))
+	idAudit := excavator.AuditIDNormalization(metadata)
+	fmt.Printf("   ✓ Total extracted: %d vectors with metadata\n", len(vectors))
+	fmt.Printf("   ✓ ID normalization audit: %s\n\n", idAudit.Summary())
 
 	// Phase 2: Topology Analysis
 	fmt.Println("🗺️  Phase 2: Topology Analysis")
@@ -217,6 +242,7 @@ func runOnce(cfg config) (string, error) {
 	topo.SetSeed(cfg.clusterSeed)
 	topo.SetMoatThreshold(cfg.moatThreshold)
 	topo.SetFilterDegenerate(cfg.filterDegenerate)
+	topo.SetAutoTune(cfg.autoTuneDBSCAN)
 
 	// When Redis workspace is enabled, load topology sample from Redis instead
 	// of the in-memory slice.
@@ -232,6 +258,7 @@ func runOnce(cfg config) (string, error) {
 	}
 
 	clusters := topo.AnalyzeClusters(topoVecs, topoMeta)
+	dbscanDiag := topo.LastDiagnostics()
 
 	// Optional: replace layer/source labels with DeepSeek-generated semantic names.
 	if cfg.semanticLabels && cfg.deepseekKey != "" {
@@ -246,6 +273,39 @@ func runOnce(cfg config) (string, error) {
 	fmt.Printf("   ✓ Found %d domain bridges\n", len(bridges))
 	fmt.Printf("   ✓ Detected %d knowledge moats\n\n", len(moats))
 
+	paramOrigin := "configured defaults"
+	switch {
+	case dbscanDiag.AutoTuned:
+		paramOrigin = "auto_tuned"
+	case dbscanDiag.FallbackUsed && cfg.autoTuneDBSCAN:
+		paramOrigin = "auto_tune_fallback"
+	}
+	diagnosticsFinding := models.Finding{
+		Type:    "topology_diagnostics",
+		Subject: fmt.Sprintf("DBSCAN params (%s): eps=%.3f minPts=%d", paramOrigin, dbscanDiag.ChosenEps, dbscanDiag.ChosenMinPts),
+		ReasoningChain: fmt.Sprintf(
+			"requested_eps=%.3f requested_minPts=%d sampled_pairs=%d p10=%.3f p25=%.3f p50=%.3f p75=%.3f p90=%.3f reason=%s",
+			dbscanDiag.RequestedEps,
+			dbscanDiag.RequestedMinPts,
+			dbscanDiag.SampledPairs,
+			dbscanDiag.P10,
+			dbscanDiag.P25,
+			dbscanDiag.P50,
+			dbscanDiag.P75,
+			dbscanDiag.P90,
+			dbscanDiag.Reason,
+		),
+		Confidence: func() float64 {
+			if dbscanDiag.AutoTuned {
+				return 0.8
+			}
+			if dbscanDiag.FallbackUsed && cfg.autoTuneDBSCAN {
+				return 0.65
+			}
+			return 0.6
+		}(),
+	}
+
 	// Phase 3: Anomaly Detection
 	fmt.Println("⚠️  Phase 3: Anomaly Detection")
 	det := anomaly.New()
@@ -257,12 +317,57 @@ func runOnce(cfg config) (string, error) {
 	fmt.Printf("   ✓ Found %d orphaned clusters\n", len(orphans))
 	fmt.Printf("   ✓ Found %d source contradictions\n\n", len(contradictions))
 
+	synth := synthesis.New(cfg.qdrantURL, cfg.outputPath)
+
 	// Phase 4: DeepSeek R1 Reasoning
 	fmt.Println("🧠 Phase 4: DeepSeek R1 Reasoning")
+	reasoningBudget, resolvedProfile := reasoner.ResolveBudget(cfg.reasonerProfile, cfg.maxReasonerClusters, cfg.maxReasonerBridges, cfg.maxReasonerMoats)
+	fmt.Printf("   ✓ Reasoner budget: profile=%s clusters=%s bridges=%s moats=%s\n",
+		resolvedProfile,
+		budgetLimitLabel(reasoningBudget.MaxClusters),
+		budgetLimitLabel(reasoningBudget.MaxBridges),
+		budgetLimitLabel(reasoningBudget.MaxMoats),
+	)
 	var reasonedFindings []models.Finding
 	if cfg.deepseekKey != "" {
 		r := reasoner.New2(cfg.deepseekURL, cfg.deepseekKey, cfg.deepseekModel)
-		reasonedFindings = r.ReasonAboutTopology(clusters, bridges, moats, metadata)
+		r.SetBudget(reasoningBudget)
+		fingerprint := reasoner.TopologyFingerprint(cfg.collection, cfg.clusterSeed, cfg.deepseekModel, reasoningBudget, clusters, bridges, moats)
+		cacheDir := filepath.Join(cfg.outputPath, ".cache", "reasoner")
+		if cfg.reasonerCache {
+			cachedFindings, cacheHit, cacheErr := reasoner.LoadCachedFindings(cacheDir, fingerprint)
+			if cacheErr != nil {
+				fmt.Fprintf(os.Stderr, "   ⚠ Reasoner cache read failed: %v\n", cacheErr)
+			} else if cacheHit {
+				reasonedFindings = cachedFindings
+				fmt.Printf("   ✓ Reasoner cache hit: %s\n", fingerprint[:12])
+			} else {
+				fmt.Printf("   ℹ Reasoner cache miss: %s\n", fingerprint[:12])
+			}
+		}
+		if len(reasonedFindings) == 0 {
+			streamedFindings := make([]models.Finding, 0)
+			r.SetFindingHandler(func(f models.Finding, done, total int) {
+				streamedFindings = append(streamedFindings, f)
+				if total > 0 && (done%3 == 0 || done == total) {
+					progressFindings := make([]models.Finding, 0, len(streamedFindings)+len(anomalies)+1)
+					progressFindings = append(progressFindings, streamedFindings...)
+					progressFindings = append(progressFindings, diagnosticsFinding)
+					progressFindings = append(progressFindings, anomalies...)
+					progressPath := synth.GenerateProgressReport(progressFindings, clusters, bridges, moats, metadata, cfg.collection)
+					fmt.Printf("\n   ↳ In-progress report: %s (%d/%d)\n", progressPath, done, total)
+				}
+			})
+			reasonedFindings = r.ReasonAboutTopology(clusters, bridges, moats, metadata)
+			r.SetFindingHandler(nil)
+			if cfg.reasonerCache && len(reasonedFindings) > 0 {
+				if cacheErr := reasoner.SaveCachedFindings(cacheDir, fingerprint, reasonedFindings); cacheErr != nil {
+					fmt.Fprintf(os.Stderr, "   ⚠ Reasoner cache write failed: %v\n", cacheErr)
+				} else {
+					fmt.Printf("   ✓ Reasoner cache stored: %s\n", fingerprint[:12])
+				}
+			}
+		}
 		clusters = reasoner.PromoteClusterLabels(reasonedFindings, clusters)
 		bridges = reasoner.PromoteBridgeLabels(reasonedFindings, bridges)
 	} else {
@@ -283,13 +388,14 @@ func runOnce(cfg config) (string, error) {
 	fmt.Printf("   ✓ %d label mismatches detected\n", mismatchCount)
 	fmt.Printf("   ✓ %d taxonomy anomalies total\n\n", len(taxonomyAnomalies))
 
-	allFindings := append(reasonedFindings, append(anomalies, taxonomyAnomalies...)...)
+	allFindings := append(reasonedFindings, diagnosticsFinding)
+	allFindings = append(allFindings, anomalies...)
+	allFindings = append(allFindings, taxonomyAnomalies...)
 	fmt.Printf("   ✓ Generated %d reasoning chains\n", len(reasonedFindings))
 	fmt.Printf("   ✓ Total findings: %d\n\n", len(allFindings))
 
 	// Phase 5: Synthesis & Storage
 	fmt.Println("📝 Phase 5: Synthesis & Storage")
-	synth := synthesis.New(cfg.qdrantURL, cfg.outputPath)
 	reportPath := synth.GenerateReport(allFindings, clusters, bridges, moats, metadata, cfg.collection)
 	fmt.Printf("   ✓ Report written to %s\n", reportPath)
 	if err := synth.StoreFindings(allFindings, clusters); err != nil {
@@ -303,15 +409,11 @@ func runOnce(cfg config) (string, error) {
 
 	// Stamp analyzed points so --incremental skips them next time.
 	if len(metadata) > 0 {
-		ids := make([]uint64, len(metadata))
-		for i, m := range metadata {
-			ids[i] = m.ID
-		}
-		fmt.Printf("   📌 Stamping %d points with run ID %s\n", len(ids), runID)
-		if err := exc.StampPoints(cfg.collection, ids, runID); err != nil {
+		fmt.Printf("   📌 Stamping %d points with run ID %s\n", len(metadata), runID)
+		if err := exc.StampMetadataPoints(cfg.collection, metadata, runID); err != nil {
 			fmt.Fprintf(os.Stderr, "   ⚠ Failed to stamp points: %v\n", err)
 		} else {
-			fmt.Printf("   ✓ %d points stamped\n", len(ids))
+			fmt.Printf("   ✓ %d points stamped\n", len(metadata))
 		}
 	}
 	fmt.Println()
@@ -384,7 +486,7 @@ func main() {
 	deepseekURL := flag.String("deepseek-url", "https://api.deepseek.com/v1", "DeepSeek API base URL")
 	deepseekModel := flag.String("deepseek-model", "deepseek-reasoner", "Model: deepseek-reasoner (full R1 thinking) or deepseek-chat (fast)")
 	watchInterval := flag.String("watch", "", "Re-run on this interval (e.g. 5m, 1h). Stops on SIGINT/SIGTERM.")
-	sampleStrategy := flag.String("sample-strategy", "random", "Sampling strategy: random, stratified, diverse")
+	sampleStrategy := flag.String("sample-strategy", "random", "Sampling strategy: random, stratified, diverse, temporal")
 	semanticLabels := flag.Bool("semantic-labels", false, "Generate semantic cluster labels via DeepSeek (requires --deepseek-key)")
 	incremental := flag.Bool("incremental", false, "Only extract unstamped points (skip previously analyzed)")
 	minClusterSize := flag.Int("min-cluster-size", 5, "Minimum DBSCAN cluster size")
@@ -394,6 +496,12 @@ func main() {
 	clusterSeed := flag.Int64("cluster-seed", 42, "RNG seed for deterministic clustering (0 = random each run)")
 	moatThreshold := flag.Float64("moat-threshold", 0.5, "Max centroid similarity for a pair to qualify as a knowledge moat (raise for dense corpora)")
 	filterDegenerate := flag.Bool("filter-degenerate", true, "Exclude density=1.0/coherence=1.0 null-content clusters from bridge and moat analysis")
+	autoTuneDBSCAN := flag.Bool("auto-tune-dbscan", false, "Adapt DBSCAN epsilon/minPts from sampled pairwise distance statistics")
+	reasonerProfile := flag.String("reasoner-profile", "balanced", "Reasoning budget profile: fast, balanced, deep")
+	reasonerMaxClusters := flag.Int("reasoner-max-clusters", -1, "Override max clusters sent to reasoner (-1 = profile default, 0 = all)")
+	reasonerMaxBridges := flag.Int("reasoner-max-bridges", -1, "Override max bridges sent to reasoner (-1 = profile default, 0 = all)")
+	reasonerMaxMoats := flag.Int("reasoner-max-moats", -1, "Override max moats sent to reasoner (-1 = profile default, 0 = all)")
+	reasonerCache := flag.Bool("reasoner-cache", true, "Cache reasoner findings by deterministic topology fingerprint")
 	queryReport := flag.String("query-report", "", "Path to a JSON report to query instead of running the pipeline")
 	queryTopic := flag.String("query-topic", "", "Filter clusters by topic (e.g. consciousness_philosophy)")
 	queryMode := flag.String("query-mode", "", "Filter clusters by mode (e.g. scholarly_annotation)")
@@ -437,27 +545,33 @@ func main() {
 	}
 
 	cfg := config{
-		collection:     *collection,
-		sampleSize:     *sampleSize,
-		batchSize:      *batchSize,
-		strict:         *strict,
-		vectorName:     *vectorName,
-		vectorCombine:  *vectorCombine,
-		outputPath:     *outputPath,
-		qdrantURL:      qdrant,
-		deepseekKey:    dsKey,
-		deepseekURL:    *deepseekURL,
-		deepseekModel:  *deepseekModel,
-		sampleStrategy: *sampleStrategy,
-		semanticLabels: *semanticLabels,
-		incremental:    *incremental,
-		minClusterSize: *minClusterSize,
-		minSamples:     *minSamples,
-		redisURL:         *redisURL,
-		epsilon:          *epsilon,
-		clusterSeed:      *clusterSeed,
-		moatThreshold:    *moatThreshold,
-		filterDegenerate: *filterDegenerate,
+		collection:          *collection,
+		sampleSize:          *sampleSize,
+		batchSize:           *batchSize,
+		strict:              *strict,
+		vectorName:          *vectorName,
+		vectorCombine:       *vectorCombine,
+		outputPath:          *outputPath,
+		qdrantURL:           qdrant,
+		deepseekKey:         dsKey,
+		deepseekURL:         *deepseekURL,
+		deepseekModel:       *deepseekModel,
+		sampleStrategy:      *sampleStrategy,
+		semanticLabels:      *semanticLabels,
+		incremental:         *incremental,
+		minClusterSize:      *minClusterSize,
+		minSamples:          *minSamples,
+		redisURL:            *redisURL,
+		epsilon:             *epsilon,
+		clusterSeed:         *clusterSeed,
+		moatThreshold:       *moatThreshold,
+		filterDegenerate:    *filterDegenerate,
+		autoTuneDBSCAN:      *autoTuneDBSCAN,
+		reasonerProfile:     *reasonerProfile,
+		maxReasonerClusters: *reasonerMaxClusters,
+		maxReasonerBridges:  *reasonerMaxBridges,
+		maxReasonerMoats:    *reasonerMaxMoats,
+		reasonerCache:       *reasonerCache,
 	}
 	if err := validateConfig(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

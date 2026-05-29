@@ -50,7 +50,6 @@ func hostname(rawURL string) string {
 	return rawURL
 }
 
-// GenerateReport creates a markdown synthesis document and a matching JSON file.
 func (s *Synthesizer) GenerateReport(
 	findings []models.Finding,
 	clusters []models.Cluster,
@@ -60,10 +59,32 @@ func (s *Synthesizer) GenerateReport(
 	collection string,
 ) string {
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
+	return s.generateReportWithTimestamp(findings, clusters, bridges, moats, metadata, collection, timestamp, true)
+}
+
+func (s *Synthesizer) GenerateProgressReport(
+	findings []models.Finding,
+	clusters []models.Cluster,
+	bridges []models.Bridge,
+	moats []models.Moat,
+	metadata []models.VectorMetadata,
+	collection string,
+) string {
+	return s.generateReportWithTimestamp(findings, clusters, bridges, moats, metadata, collection, "in_progress", false)
+}
+
+func (s *Synthesizer) generateReportWithTimestamp(
+	findings []models.Finding,
+	clusters []models.Cluster,
+	bridges []models.Bridge,
+	moats []models.Moat,
+	metadata []models.VectorMetadata,
+	collection string,
+	timestamp string,
+	printJSONPath bool,
+) string {
 	reportPath := filepath.Join(s.outputPath, fmt.Sprintf("vectoreology_%s.md", timestamp))
-
 	os.MkdirAll(s.outputPath, 0755)
-
 	report := renderReport(reportData{
 		findings:   findings,
 		clusters:   clusters,
@@ -73,12 +94,9 @@ func (s *Synthesizer) GenerateReport(
 		collection: collection,
 	})
 	os.WriteFile(reportPath, []byte(report), 0644)
-
-	// Also generate JSON for the TUI lens.
-	if jsonPath := s.GenerateJSON(findings, clusters, bridges, moats, metadata, collection, timestamp); jsonPath != "" {
+	if jsonPath := s.GenerateJSON(findings, clusters, bridges, moats, metadata, collection, timestamp); printJSONPath && jsonPath != "" {
 		fmt.Printf("   ✓ JSON written to %s\n", jsonPath)
 	}
-
 	return reportPath
 }
 

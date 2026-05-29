@@ -15,6 +15,7 @@ type JSONReport struct {
 	Timestamp       string             `json:"timestamp"`
 	Collection      string             `json:"collection"`
 	Summary         JSONSummary        `json:"summary"`
+	Topology        *JSONTopology      `json:"topology,omitempty"`
 	Clusters        []JSONCluster      `json:"clusters"`
 	Bridges         []JSONBridge       `json:"bridges"`
 	Moats           []JSONMoat         `json:"moats"`
@@ -32,6 +33,11 @@ type JSONSummary struct {
 	DuplicateHeavyClusters int `json:"duplicate_heavy_clusters"`
 	OverSampledClusters    int `json:"oversampled_clusters"`
 	SkippedBridges         int `json:"skipped_bridges"`
+}
+
+type JSONTopology struct {
+	Parameters string `json:"parameters"`
+	Rationale  string `json:"rationale,omitempty"`
 }
 
 // JSONAttractor describes a recurring semantic concept across clusters/bridges.
@@ -114,6 +120,8 @@ type JSONAnomaly struct {
 	ClusterID      int      `json:"cluster_id"`
 	ReasoningChain string   `json:"reasoning_chain"`
 	IsAnomaly      bool     `json:"is_anomaly"`
+	Confidence     float64  `json:"confidence,omitempty"`
+	ConfidenceBand string   `json:"confidence_band,omitempty"`
 	AnomalyType    string   `json:"anomaly_type,omitempty"`
 	Evidence       string   `json:"evidence,omitempty"`
 	PossibleCauses []string `json:"possible_causes,omitempty"`
@@ -209,6 +217,8 @@ func (s *Synthesizer) GenerateJSON(
 			ClusterID:      cid,
 			ReasoningChain: f.ReasoningChain,
 			IsAnomaly:      true,
+			Confidence:     f.Confidence,
+			ConfidenceBand: f.ConfidenceBand,
 			AnomalyType:    f.AnomalyType,
 			Evidence:       f.Evidence,
 			PossibleCauses: f.PossibleCauses,
@@ -306,6 +316,7 @@ func (s *Synthesizer) GenerateJSON(
 	report := JSONReport{
 		Timestamp:  strings.ReplaceAll(timestamp, "_", "T"),
 		Collection: collection,
+		Topology:   extractJSONTopology(findings),
 		Summary: JSONSummary{
 			TotalClusters:          len(clusters),
 			TotalBridges:           len(bridges),
@@ -372,4 +383,13 @@ func parsePair(subject, sep string) (int, int) {
 	fmt.Sscanf(left, "%d", &a)
 	fmt.Sscanf(right, "%d", &b)
 	return a, b
+}
+
+func extractJSONTopology(findings []models.Finding) *JSONTopology {
+	for _, finding := range findings {
+		if finding.Type == "topology_diagnostics" {
+			return &JSONTopology{Parameters: finding.Subject, Rationale: finding.ReasoningChain}
+		}
+	}
+	return nil
 }

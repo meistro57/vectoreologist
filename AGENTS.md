@@ -34,8 +34,10 @@ internal/topology/clusterer.go  PCA+DBSCAN pipeline, SetClusterParams, FindBridg
 internal/topology/pca.go        pcaReduce(): parallel covariance-matrix PCA via gonum EigenSym
 internal/topology/dbscan.go     runDBSCAN(), buildNeighborLists(), unitCosineDistance(), l2Normalise()
 internal/anomaly/detector.go    DetectClusterAnomalies, DetectOrphans, DetectContradictions
-internal/reasoner/deepseek.go   DeepSeek API client; logs reasoning_content live, stores final-facing conclusion text + evidence
-internal/synthesis/report.go    GenerateReport orchestration, GenerateJSON handoff, StoreFindings (Qdrant)
+internal/reasoner/deepseek.go   DeepSeek API client; streams SSE when available, stores final-facing conclusion text + evidence
+internal/reasoner/budget.go     ReasoningBudget profiles/overrides; deterministic budget selection helpers
+internal/reasoner/cache.go      Topology fingerprint + file-backed reasoner findings cache load/save
+internal/synthesis/report.go    GenerateReport orchestration, GenerateProgressReport, GenerateJSON handoff, StoreFindings (Qdrant)
 internal/synthesis/report_render.go Structured markdown renderer: evidence gates, diagnostics, attractors, recommendations
 internal/synthesis/json.go      Structured JSON report with diagnostics, attractors, recommendations, review flags
 internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors, Delete; binary float32 encoding
@@ -72,9 +74,12 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 
 ### DeepSeek reasoning
 - Default model is `deepseek-reasoner` (R1). Each call can take up to 5 minutes — timeout is set accordingly.
-- `callDeepSeek` returns a `deepSeekResponse{thinking, conclusion}` struct — `reasoning_content` may be logged live, but reports store final-facing conclusions.
-- Reasoning is capped: **all clusters**, top **10 bridges** by strength, top **5 moats** by distance.
-- `--deepseek-model deepseek-chat` for fast mode (no chain-of-thought).
+- `callDeepSeekWithSubject` requests `stream=true`; SSE output is printed live when available, with JSON fallback for non-stream responses.
+- Reasoning budget defaults to `balanced`: **all clusters**, top **10 bridges**, top **5 moats**; profiles: `fast` (`12/4/2`) and `deep` (`all/25/12`).
+- Overrides: `--reasoner-max-clusters|bridges|moats` (`-1` profile default, `0` all).
+- `--reasoner-cache` (default `true`) reuses findings via deterministic topology fingerprint files under `findings/.cache/reasoner/`.
+- `GenerateProgressReport` emits `vectoreology_in_progress.md/.json` snapshots during reasoning.
+- `--deepseek-model deepseek-chat` remains the fast no-chain mode.
 
 ### .env loading
 - `loadDotEnv(".env")` runs before flag parsing in `main()`.
@@ -108,7 +113,7 @@ internal/workspace/redis.go     Workspace: StoreBatch, LoadSample, TotalVectors,
 
 - Cluster labels are hybridized from top metadata signatures + centroid-nearest exemplar snippets; optional reasoner promotion can still override labels later.
 - `excavator.Sampler` `Diverse` uses metadata-stratified candidate pools + MaxMin; `Temporal` uses timestamp/run-id windows with recency weighting.
-- No streaming for DeepSeek responses — full response is buffered before printing.
+- Event-stream parse failures currently return an error (no automatic retry against non-stream body once an SSE response path is chosen).
 
 ---
 

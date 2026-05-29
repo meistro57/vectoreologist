@@ -51,7 +51,7 @@ func TestDetectClusterAnomalies_HealthyCluster(t *testing.T) {
 
 func TestDetectClusterAnomalies_LowCoherence(t *testing.T) {
 	d := New()
-	cluster := clusterWith(1, "incoherent", 0.3, 0.5) // coherence < 0.5
+	cluster := clusterWith(1, "incoherent", 0.3, 0.5)
 	got := d.DetectClusterAnomalies([]models.Cluster{cluster})
 
 	cohAnoms := findingsOfType(got, "coherence_anomaly")
@@ -66,6 +66,12 @@ func TestDetectClusterAnomalies_LowCoherence(t *testing.T) {
 	}
 	if len(cohAnoms[0].Clusters) == 0 || cohAnoms[0].Clusters[0] != 1 {
 		t.Errorf("Clusters should contain cluster ID 1, got %v", cohAnoms[0].Clusters)
+	}
+	if cohAnoms[0].Confidence <= 0 || cohAnoms[0].Confidence > 1 {
+		t.Fatalf("confidence should be in (0,1], got %f", cohAnoms[0].Confidence)
+	}
+	if cohAnoms[0].ConfidenceBand == "" {
+		t.Fatal("confidence band should be set")
 	}
 }
 
