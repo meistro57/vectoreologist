@@ -2,6 +2,8 @@ package synthesis
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"net/url"
 	"os"
@@ -162,7 +164,24 @@ func stringsToAny(values []string) []any {
 	return converted
 }
 
+// findingPointID returns a stable uint64 ID for a finding derived from a
+// SHA-256 hash of its type, subject, and cluster list. Identical findings
+// across runs produce the same ID, so successive runs upsert (overwrite)
+// rather than appending duplicate rows. Different findings are extremely
+// unlikely to collide (2^64 space).
+func findingPointID(f models.Finding) uint64 {
+	clusterStrs := make([]string, len(f.Clusters))
+	for i, c := range f.Clusters {
+		clusterStrs[i] = fmt.Sprintf("%d", c)
+	}
+	key := f.Type + "|"	+ f.Subject + "|" + strings.Join(clusterStrs, ",")
+	sum := sha256.Sum256([]byte(key))
+	return binary.LittleEndian.Uint64(sum[:8])
+}
+
 // StoreFindings writes findings back to Qdrant.
+// Point IDs are derived from a hash of finding type+subject+clusters so that
+// re-runs upsert (overwrite) existing findings rather than appending duplicates.
 // Uses a 1-dimensional confidence vector; payload holds all finding fields.
 func (s *Synthesizer) StoreFindings(findings []models.Finding, clusters []models.Cluster) error {
 	if len(findings) == 0 {
@@ -188,9 +207,8 @@ func (s *Synthesizer) StoreFindings(findings []models.Finding, clusters []models
 	}
 
 	clusterMemberPointIDs := buildClusterMemberPointIDs(clusters)
-	base := uint64(time.Now().UnixMilli())
 	points := make([]*qdrant.PointStruct, 0, len(findings))
-	for i, f := range findings {
+	for _, f := range findings {
 		clusterStrs := make([]string, len(f.Clusters))
 		for j, c := range f.Clusters {
 			clusterStrs[j] = fmt.Sprintf("%d", c)
@@ -210,7 +228,7 @@ func (s *Synthesizer) StoreFindings(findings []models.Finding, clusters []models
 		}
 
 		points = append(points, &qdrant.PointStruct{
-			Id:      qdrant.NewIDNum(base + uint64(i)),
+			Id:      qdrant.NewIDNum(findingPointID(f)),
 			Vectors: qdrant.NewVectors(float32(f.Confidence)),
 			Payload: qdrant.NewValueMap(payload),
 		})

@@ -114,7 +114,17 @@ func (r *Reasoner) ReasonAboutTopology(
 		subject := fmt.Sprintf("Bridge: %d ↔ %d", bridge.ClusterA, bridge.ClusterB)
 		fmt.Printf("\r   reasoning %d/%d: %s ...", done, total, subject)
 		aSnips, bSnips := bridgeSnippets(bridge, byID, 4)
-		resp, err := r.callDeepSeekWithSubject(subject, buildBridgePrompt(bridge, aSnips, bSnips))
+		// Look up cluster labels so R1 knows what it's bridging.
+		var labelA, labelB string
+		for _, c := range clusters {
+			if c.ID == bridge.ClusterA {
+				labelA = c.Label
+			}
+			if c.ID == bridge.ClusterB {
+				labelB = c.Label
+			}
+		}
+		resp, err := r.callDeepSeekWithSubject(subject, buildBridgePrompt(bridge, labelA, labelB, aSnips, bSnips))
 		if err != nil {
 			continue
 		}
@@ -210,9 +220,22 @@ func (r *Reasoner) callDeepSeekWithSubject(subject, prompt string) (*deepSeekRes
 	}
 
 	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-		streamed, err := r.readStreamedResponse(resp.Body, subject)
-		if err != nil {
-			return nil, err
+		// Buffer the body so we can retry as JSON if SSE parse fails.
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("read SSE body: %w", readErr)
+		}
+		streamed, sseErr := r.readStreamedResponse(bytes.NewReader(body), subject)
+		if sseErr != nil {
+			// SSE parse failed — the server may have returned JSON despite the
+			// event-stream content-type header. Try JSON fallback before giving up.
+			fmt.Printf("\n   Warning: SSE parse failed for %q (%v) — attempting JSON fallback\n", subject, sseErr)
+			jsonResp, jsonErr := parseJSONResponse(body)
+			if jsonErr != nil {
+				// Neither path worked; surface the original SSE error.
+				return nil, fmt.Errorf("SSE: %w; JSON fallback: %v", sseErr, jsonErr)
+			}
+			return jsonResp, nil
 		}
 		return streamed, nil
 	}
@@ -446,15 +469,24 @@ func encodeBridgeEvidence(aSnips, bSnips []string) string {
 	return strings.TrimSpace(sb.String())
 }
 
-func buildBridgePrompt(bridge models.Bridge, aSnips, bSnips []string) string {
-	prompt := fmt.Sprintf("Analyze this semantic bridge between vector clusters:\n\nStrength: %.2f (%s)\nCluster %d ↔ Cluster %d\n",
-		bridge.Strength, bridge.LinkType, bridge.ClusterA, bridge.ClusterB)
+func buildBridgePrompt(bridge models.Bridge, labelA, labelB string, aSnips, bSnips []string) string {
+	clusterADesc := fmt.Sprintf("Cluster %d", bridge.ClusterA)
+	if labelA != "" {
+		clusterADesc = fmt.Sprintf("Cluster %d (%s)", bridge.ClusterA, labelA)
+	}
+	clusterBDesc := fmt.Sprintf("Cluster %d", bridge.ClusterB)
+	if labelB != "" {
+		clusterBDesc = fmt.Sprintf("Cluster %d (%s)", bridge.ClusterB, labelB)
+	}
+
+	prompt := fmt.Sprintf("Analyze this semantic bridge between vector clusters:\n\nStrength: %.2f (%s)\n%s ↔ %s\n",
+		bridge.Strength, bridge.LinkType, clusterADesc, clusterBDesc)
 
 	if len(aSnips) > 0 {
-		prompt += fmt.Sprintf("\nCluster %d samples:\n• %s\n", bridge.ClusterA, strings.Join(aSnips, "\n• "))
+		prompt += fmt.Sprintf("\n%s samples:\n• %s\n", clusterADesc, strings.Join(aSnips, "\n• "))
 	}
 	if len(bSnips) > 0 {
-		prompt += fmt.Sprintf("\nCluster %d samples:\n• %s\n", bridge.ClusterB, strings.Join(bSnips, "\n• "))
+		prompt += fmt.Sprintf("\n%s samples:\n• %s\n", clusterBDesc, strings.Join(bSnips, "\n• "))
 	}
 
 	prompt += "\nIn 2-3 sentences: what shared concept bridges these two clusters? End with a **Conclusion:** naming the bridge concept."
