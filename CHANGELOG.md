@@ -34,6 +34,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **ID reproducibility audit** — added `AuditIDNormalization` with collision/nondeterminism/missing-field counters and CLI summary output after sampling.
 
 ### Changed
+- **Reasoner bridge prompt test updated** — fixed the bridge prompt unit test to use the current label-aware prompt signature, restoring CI compatibility with the production prompt builder.
 - **Anomaly confidence calibration** — confidence banding for anomaly findings now blends percentile ranking with z-style tail weighting for more stable severity ordering across mixed cluster-size distributions.
 - **Hybrid semantic label promotion** — promoted labels are now cleaned/normalized and preserve prior source attribution metadata instead of overwriting provenance context.
 - **Topology sampling + link selection now deterministic by default** — internal RNG is seeded (`42`) so subsampling and bridge sample-links are stable across runs unless `--cluster-seed 0` is set.
