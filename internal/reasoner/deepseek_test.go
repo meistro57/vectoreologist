@@ -267,8 +267,8 @@ func TestBuildBridgePrompt_ContainsFields(t *testing.T) {
 	b := models.Bridge{
 		ClusterA: 3, ClusterB: 9, Strength: 0.72, LinkType: "strong_semantic",
 	}
-	p := buildBridgePrompt(b, []string{"snippet from cluster A"}, []string{"snippet from cluster B"})
-	for _, s := range []string{"3", "9", "0.72", "strong_semantic", "snippet from cluster A", "snippet from cluster B", "**Conclusion:**"} {
+	p := buildBridgePrompt(b, "label A", "label B", []string{"snippet from cluster A"}, []string{"snippet from cluster B"})
+	for _, s := range []string{"3", "9", "label A", "label B", "0.72", "strong_semantic", "snippet from cluster A", "snippet from cluster B", "**Conclusion:**"} {
 		if !strings.Contains(p, s) {
 			t.Errorf("bridge prompt missing %q", s)
 		}
