@@ -258,6 +258,19 @@ func renderClusterMarkdown(section clusterSection) string {
 		machineLabel = section.cluster.Label
 	}
 	var sb strings.Builder
+
+	// Duplicate-heavy (noise) clusters: emit a compact stub — no source list, no evidence wall.
+	if section.duplicateHeavy {
+		sb.WriteString(fmt.Sprintf("### Cluster %d ⚠ NOISE — %s\n\n", section.cluster.ID, machineLabel))
+		sb.WriteString(fmt.Sprintf("Size: %d | Density: %.2f | Coherence: %.2f\n\n", section.cluster.Size, section.cluster.Density, section.cluster.Coherence))
+		sb.WriteString("Review Flags:\n")
+		for _, flag := range section.flags {
+			sb.WriteString(fmt.Sprintf("- %s\n", flag))
+		}
+		sb.WriteString("\n")
+		return sb.String()
+	}
+
 	sb.WriteString(fmt.Sprintf("### Cluster %d: %s\n\n", section.cluster.ID, shortenForHeading(section.suggestedLabel, 100)))
 	sb.WriteString(fmt.Sprintf("Machine Label: `%s`  \n", machineLabel))
 	sb.WriteString(fmt.Sprintf("Size: %d  \n", section.cluster.Size))
@@ -305,6 +318,11 @@ func renderClusterMarkdown(section clusterSection) string {
 	return sb.String()
 }
 
+// minBridgeSnippets is the minimum number of representative snippets required
+// on EACH side of a bridge before it qualifies for LLM interpretation.
+// A bridge with fewer than this on either side is skipped — dual-sided enforcement.
+const minBridgeSnippets = 2
+
 func renderBridge(bridge models.Bridge, clustersByID map[int]models.Cluster, metadataByID map[uint64]models.VectorMetadata, finding models.Finding) bridgeSection {
 	clusterA := clustersByID[bridge.ClusterA]
 	clusterB := clustersByID[bridge.ClusterB]
@@ -320,12 +338,23 @@ func renderBridge(bridge models.Bridge, clustersByID map[int]models.Cluster, met
 	skipped := false
 	analysis := stripTrailingEcho(cleaned, sharedConcept)
 
+	// Dual-sided snippet enforcement: both sides must meet the minimum threshold.
+	// A bridge where one side is empty OR under-evidenced is not ready for interpretation.
+	aInsufficient := len(evidenceA) < minBridgeSnippets
+	bInsufficient := len(evidenceB) < minBridgeSnippets
+
 	switch {
-	case len(evidenceA) == 0 || len(evidenceB) == 0:
+	case aInsufficient || bInsufficient:
 		skipped = true
 		analysis = "Insufficient evidence to interpret this bridge."
 		sharedConcept = "Insufficient evidence to interpret this bridge."
-		flags = append(flags, "Insufficient representative snippets")
+		if aInsufficient && bInsufficient {
+			flags = append(flags, fmt.Sprintf("Insufficient representative snippets on both sides (A: %d, B: %d, need ≥%d each)", len(evidenceA), len(evidenceB), minBridgeSnippets))
+		} else if aInsufficient {
+			flags = append(flags, fmt.Sprintf("Insufficient representative snippets on cluster A side (%d, need ≥%d)", len(evidenceA), minBridgeSnippets))
+		} else {
+			flags = append(flags, fmt.Sprintf("Insufficient representative snippets on cluster B side (%d, need ≥%d)", len(evidenceB), minBridgeSnippets))
+		}
 	case !hasFinding:
 		analysis = "No interpretive analysis available for this bridge."
 		sharedConcept = "Pending interpretive analysis"
@@ -352,6 +381,23 @@ func renderBridge(bridge models.Bridge, clustersByID map[int]models.Cluster, met
 
 func renderBridgeMarkdown(section bridgeSection) string {
 	var sb strings.Builder
+
+	// Pending/skipped bridges: compact stub — no evidence walls, no triple-repeated placeholder.
+	isPending := section.sharedConcept == "Pending interpretive analysis" ||
+		section.sharedConcept == "Shared concept unavailable" ||
+		strings.Contains(strings.ToLower(section.analysis), "no interpretive analysis available")
+	if section.skipped || isPending {
+		sb.WriteString(fmt.Sprintf("### Bridge: Cluster %d ↔ Cluster %d — strength %.2f — ⏳ pending\n\n",
+			section.bridge.ClusterA, section.bridge.ClusterB, section.bridge.Strength))
+		for _, flag := range section.flags {
+			if flag != "None" {
+				sb.WriteString(fmt.Sprintf("- %s\n", flag))
+			}
+		}
+		sb.WriteString("\n")
+		return sb.String()
+	}
+
 	sb.WriteString(fmt.Sprintf("### Bridge: Cluster %d ↔ Cluster %d\n\n", section.bridge.ClusterA, section.bridge.ClusterB))
 	sb.WriteString(fmt.Sprintf("Strength: %.2f\n\n", section.bridge.Strength))
 	sb.WriteString("Cluster A:\n")
@@ -928,6 +974,9 @@ func sourceBalanceLines(balance map[string]float64) []string {
 	})
 	lines := make([]string, 0, len(rows))
 	for _, row := range rows {
+		if row.pct < 1.0 {
+			continue // suppress sources contributing <1% — noise in the report
+		}
 		lines = append(lines, fmt.Sprintf("- %s: %.0f%%", row.source, row.pct))
 	}
 	return lines

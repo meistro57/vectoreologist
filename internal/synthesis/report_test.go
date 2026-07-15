@@ -109,8 +109,13 @@ func TestGenerateReport_InsufficientBridgeEvidence(t *testing.T) {
 	content, _ := os.ReadFile(path)
 	body := string(content)
 
-	if !strings.Contains(body, "Insufficient evidence to interpret this bridge.") {
-		t.Fatalf("bridge evidence guard missing:\n%s", body)
+	// Skipped bridges now render as compact stubs — verify the stub is present
+	// and the full evidence/analysis block is NOT rendered.
+	if !strings.Contains(body, "⏳ pending") {
+		t.Fatalf("bridge evidence guard missing (expected compact pending stub):\n%s", body)
+	}
+	if strings.Contains(body, "Shared Concept:") {
+		t.Fatalf("skipped bridge should not render full evidence block:\n%s", body)
 	}
 }
 

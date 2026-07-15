@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/meistro57/vectoreologist/internal/models"
 	qdrant "github.com/qdrant/go-client/qdrant"
@@ -164,6 +165,17 @@ func stringsToAny(values []string) []any {
 	return converted
 }
 
+// sanitizeUTF8 replaces any invalid UTF-8 byte sequences with the Unicode
+// replacement character (U+FFFD). DeepSeek R1 occasionally produces truncated
+// multi-byte characters (e.g. \xe2\x80 without the closing byte) that cause
+// the Qdrant Go client to panic inside NewValueMap during gRPC serialization.
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "\uFFFD")
+}
+
 // findingPointID returns a stable uint64 ID for a finding derived from a
 // SHA-256 hash of its type, subject, and cluster list. Identical findings
 // across runs produce the same ID, so successive runs upsert (overwrite)
@@ -174,7 +186,7 @@ func findingPointID(f models.Finding) uint64 {
 	for i, c := range f.Clusters {
 		clusterStrs[i] = fmt.Sprintf("%d", c)
 	}
-	key := f.Type + "|"	+ f.Subject + "|" + strings.Join(clusterStrs, ",")
+	key := f.Type + "|" + f.Subject + "|" + strings.Join(clusterStrs, ",")
 	sum := sha256.Sum256([]byte(key))
 	return binary.LittleEndian.Uint64(sum[:8])
 }
@@ -215,9 +227,9 @@ func (s *Synthesizer) StoreFindings(findings []models.Finding, clusters []models
 		}
 
 		payload := map[string]any{
-			"type":            f.Type,
-			"subject":         f.Subject,
-			"reasoning_chain": f.ReasoningChain,
+			"type":            sanitizeUTF8(f.Type),
+			"subject":         sanitizeUTF8(f.Subject),
+			"reasoning_chain": sanitizeUTF8(f.ReasoningChain),
 			"confidence":      f.Confidence,
 			"is_anomaly":      f.IsAnomaly,
 			"clusters":        strings.Join(clusterStrs, ","),
