@@ -310,7 +310,21 @@ func extractPoint(point *qdrant.RetrievedPoint, vectorName string, vectorCombine
 		source = getPayloadString(point.Payload, "source_collection", "")
 	}
 	if source == "" {
-		source = getPayloadString(point.Payload, "source_id", "unknown")
+		source = getPayloadString(point.Payload, "source_id", "")
+	}
+	if source == "" {
+		// keystones have no single source. Label by the concept instead, so the
+		// report's "source balance" becomes a per-cluster concept composition
+		// rather than an alphabetical artifact of the sorted source_ids list.
+		source = getPayloadString(point.Payload, "concept", "")
+	}
+	if source == "" {
+		if ids := getPayloadList(point.Payload, "source_ids"); len(ids) > 0 {
+			source = ids[0]
+		}
+	}
+	if source == "" {
+		source = "unknown"
 	}
 
 	fragment := buildFragment(point.Payload)
@@ -371,8 +385,21 @@ func buildFragment(payload map[string]*qdrant.Value) string {
 
 	if s := getPayloadString(payload, "canonical_statement", ""); s != "" {
 		parts = append(parts, s)
+	} else if s := getPayloadString(payload, "statement", ""); s != "" {
+		parts = append(parts, s)
 	} else if s := getPayloadString(payload, "summary", ""); s != "" {
 		parts = append(parts, s)
+	}
+
+	// keystones-specific fields (canon / recursive pass)
+	if s := getPayloadString(payload, "one_liner", ""); s != "" {
+		parts = append(parts, s)
+	}
+	if s := getPayloadString(payload, "concept", ""); s != "" {
+		parts = append(parts, "Concept: "+s)
+	}
+	if themes := getPayloadList(payload, "themes"); len(themes) > 0 {
+		parts = append(parts, "Themes: "+joinMax(themes, 6))
 	}
 
 	if claims := getPayloadList(payload, "claims"); len(claims) > 0 {
