@@ -1,84 +1,116 @@
 # Vectoreologist Roadmap
 
-## Current Status (2026-05)
+## Current Status (2026-07)
 
-### Completed
-- Pure Go PCA + DBSCAN clustering (replaces Python subprocess entirely — no umap-learn, hdbscan, or Python required)
-- Redis vector workspace (`--redis-url`) for streaming extraction on large collections
-- `scripts/start-redis.sh` Docker setup for Redis
-- `docker-compose.yml` for Qdrant + Redis
-- Core `vectoreologist` CLI pipeline is working end-to-end:
-  - Qdrant extraction (batched)
-  - PCA + DBSCAN clustering (pure Go, in-process)
-  - Adaptive DBSCAN tuning + fallback diagnostics
-  - Bridge/moat detection
-  - Anomaly detection with calibrated confidence banding
-  - DeepSeek reasoning integration (`deepseek-reasoner` and `deepseek-chat`)
-  - Streamed reasoning output in CLI
-  - Reasoner budget profiles/overrides (`fast`/`balanced`/`deep` + `--reasoner-max-*`)
-  - Deterministic topology-fingerprint cache for reasoner findings
-  - Incremental in-progress markdown/JSON report assembly
-  - Markdown + JSON report generation
-  - Findings upsert to `vectoreology_findings`
-- Sampling and execution modes:
-  - `random`, `stratified`, `diverse`, `temporal` sampling
-  - Diverse sampler now uses metadata-stratified candidate pools + MaxMin selection
-  - Temporal sampler now uses timestamp/run-id time windows with recency weighting
-  - `--incremental` mode with point stamping (`vectoreology_last_run`)
-  - `--watch` mode for scheduled reruns
-- `vectoreologist-lens` TUI is implemented:
-  - Cluster / bridge / anomaly views
-  - Search and jump-to-result
-  - Sorting and anomalies-only filter
-  - Reload report from disk
-  - JSON export for selected item / visible list
-- Test coverage exists across core packages and lens logic.
+Vectoreologist has moved beyond the earlier stabilisation plan. The core excavation pipeline is now mature enough that the next phase should focus on trust, operator workflow, repeatable evaluation, and lower-friction exploration rather than more one-off topology features.
 
-## Gaps vs Earlier Lens Plan
+### Completed Since the Earlier Plan
 
-### Not Yet Implemented
-- Adjustable numeric filters in Lens (coherence/density thresholds)
-- Orphans-only filter in Lens
-- Bridge view scoped to selected cluster as default navigation mode
-- CSV export from Lens
-- Clipboard copy for reasoning chains
+- Pure Go PCA + DBSCAN remains the default topology engine, with optional adaptive DBSCAN tuning and explicit fallback diagnostics.
+- Analysis output now includes calibrated anomaly confidence banding and structured markdown/JSON diagnostics.
+- Cluster labelling has advanced from source-dominant labels to hybrid metadata/exemplar labels with optional reasoner promotion.
+- DeepSeek reasoning now supports streamed CLI output, configurable reasoning budgets, deterministic topology-fingerprint caching, and in-progress markdown/JSON snapshots.
+- Sampling has been upgraded beyond random fallbacks: `diverse` uses metadata-stratified MaxMin selection, and `temporal` uses timestamp/run-id windows with recency weighting.
+- Point ID handling is deterministic and auditable across numeric and UUID Qdrant IDs through explicit namespace normalization.
+- Incremental runs, watch mode, taxonomy classification, taxonomy-aware query mode, and the `vectoreologist-lens` terminal explorer are available.
 
-## Next Priorities
+## Product Direction
 
-1. **Lens Filter Expansion**
-   - Add interactive threshold controls for coherence/density
-   - Add orphans-only toggle
-   - Add tests for threshold + orphan filtering interactions
+The next version should make Vectoreologist feel less like a powerful batch excavation tool and more like a dependable analysis workbench. The main goal is to help operators answer three questions quickly:
 
-2. **Lens Navigation Improvements**
-   - Add “show bridges from selected cluster” mode
-   - Enable bridge-to-cluster jump consistency across filtered/sorted lists
+1. **Can I trust this run?**
+2. **What changed since the last run?**
+3. **What should I inspect or act on first?**
 
-3. **Lens Export Improvements**
-   - Add CSV export for visible list
-   - Add clipboard copy action for selected reasoning text
+## Priority Plan
 
-4. **Reasoning UX / Performance**
-   - Better per-phase timing + throughput metrics in CLI output
-   - Configurable cadence for in-progress report writes (count- or time-based)
+### 1. Run Trust and Diagnostics
 
-5. **Operational Hardening**
-   - Retry/backoff around network-bound operations (DeepSeek/Qdrant)
-   - Decide stream-parse failure behavior (hard-fail vs non-stream fallback)
-   - Integration tests for cache-hit/no-API-call behavior and mixed stream/non-stream responses
-   - Optional write-disable mode for findings storage (`--no-store`)
-   - Additional tests for incremental stamping edge cases
+- Add a per-run diagnostics artifact containing phase timings, vector counts, sampled/dropped counts, DBSCAN tuning source, Redis usage, cache hits, reasoner call counts, and Qdrant write results.
+- Add a concise terminal run summary that highlights warnings and skipped/degraded phases at the end of every run.
+- Promote existing topology/anomaly diagnostics into a stable machine-readable schema so Lens, tests, and future dashboards can consume them consistently.
+- Add a `--diagnostics-only` mode that validates inputs, connectivity, model configuration, and output paths without running the full excavation.
+
+### 2. Report Diffing and Trend Analysis
+
+- Add a report comparison command that accepts two JSON reports and emits added/removed/changed clusters, bridges, moats, anomalies, taxonomy shifts, and confidence deltas.
+- Add stable cluster matching heuristics across runs using centroid similarity, exemplar overlap, taxonomy labels, and source signatures.
+- Add trend-oriented markdown and JSON output for repeated watch/incremental runs.
+- Surface "new since previous run" and "worsened since previous run" sections in reports and Lens.
+
+### 3. Lens Workflow Improvements
+
+- Add adjustable coherence/density/confidence threshold filters.
+- Add orphans-only and review-required filters.
+- Add bridge navigation scoped to the currently selected cluster.
+- Add CSV export for visible rows and clipboard copy for selected reasoning/evidence text.
+- Add a diagnostics view that explains run quality, cache use, skipped bridges, and evidence limitations without opening raw JSON.
+
+### 4. Reasoner Reliability and Cost Control
+
+- Decide and implement stream-parse fallback behaviour: either hard-fail with a precise diagnostic or retry once using non-stream mode.
+- Add retry/backoff with jitter for transient DeepSeek and Qdrant failures, keeping non-retryable errors explicit.
+- Add budget previews before reasoning starts: estimated subject counts, cache hits, and expected API calls.
+- Add optional per-run reasoner cost telemetry when token usage is available from provider responses.
+
+### 5. Evaluation Harness
+
+- Build a small fixture corpus suite with known topology shapes: tight clusters, bridge-heavy graphs, duplicate-heavy inputs, orphan-heavy inputs, and temporal drift.
+- Add golden tests for markdown and JSON reports generated from deterministic fixtures.
+- Add benchmarks for PCA reduction, neighbour-list construction, DBSCAN, sampler strategies, report rendering, and report diffing.
+- Track benchmark output in CI initially as non-blocking artefacts, then introduce regression thresholds once stable.
+
+### 6. Operational Controls
+
+- Add `--no-store` to generate reports without writing findings back to Qdrant.
+- Add configurable Redis TTL and `--keep-workspace-on-failure` for post-mortem debugging.
+- Add an in-memory fallback mode when Redis is unavailable, guarded by explicit caps and warnings.
+- Add a standalone ID-normalization audit command for collections where reproducibility matters before the first full run.
+
+## Suggested Sequencing
+
+### Phase 1: Trust Baseline
+
+1. Per-run diagnostics JSON artifact.
+2. End-of-run terminal summary.
+3. `--no-store` for safe dry reporting.
+4. Golden JSON/markdown tests for one deterministic fixture.
+
+### Phase 2: Compare Runs
+
+1. JSON report diff command.
+2. Stable cluster matching heuristics.
+3. Trend sections in generated reports.
+4. Lens support for changed/new/review-required items.
+
+### Phase 3: Operator Polish
+
+1. Lens threshold filters and scoped bridge navigation.
+2. CSV export and clipboard copy.
+3. Diagnostics-only command.
+4. Retry/backoff and stream fallback policy.
+
+### Phase 4: Scale and Governance
+
+1. Benchmark suite and CI artefacts.
+2. Redis TTL/workspace retention controls.
+3. Reasoner cost telemetry.
+4. Standalone ID audit command.
 
 ## Backlog
 
-- Semantic label quality tuning and prompt iteration
-- Better moat explanation heuristics beyond centroid distance threshold
-- Additional report diff/comparison tooling across runs
-- Optional standalone ID-normalization audit command output
+- Better moat explanation heuristics beyond centroid distance threshold.
+- Optional HTML report export for non-terminal review.
+- Optional static dashboard generated from report JSON.
+- Pluggable reasoner providers behind the existing reasoner interface.
+- Config file support for teams that repeatedly run the same excavation profile.
+- Report redaction controls for sensitive metadata/snippets.
 
-## Definition of Done for Upcoming Lens Work
+## Definition of Done for Upcoming Work
 
-- New filters/export actions are discoverable in footer help
-- Behavior is covered by unit tests in `internal/lens/*_test.go`
-- `make test` remains green
-- No regressions in existing keybindings or JSON report compatibility
+- New CLI flags are documented in `README.md` and covered by argument validation tests.
+- New JSON structures are backward-compatible or explicitly versioned.
+- Report-rendering changes include golden tests.
+- Lens behaviours are covered by unit tests in `internal/lens/*_test.go`.
+- `go vet ./...` and `make test` pass before commit.
+- Notable user-facing changes are recorded in `CHANGELOG.md` under `[Unreleased]`.

@@ -10,6 +10,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased]
 
 ### Added
+- **July 2026 roadmap refresh** — updated `ROADMAP.md` to reflect completed stabilisation work and refocus upcoming priorities on run trust, report diffing, Lens workflow, reasoner reliability, evaluation, and operational controls.
 - **Reasoner budget controls** — added `--reasoner-profile` (`fast`, `balanced`, `deep`) plus `--reasoner-max-clusters`, `--reasoner-max-bridges`, and `--reasoner-max-moats` overrides (`-1` = profile default, `0` = all) to cap or expand DeepSeek workload without changing topology output.
 - **Reasoner fingerprint cache** — deterministic topology fingerprinting + cache load/save under `findings/.cache/reasoner/` now enables cache-hit reuse of prior reasoning findings on equivalent runs.
 - **Streaming DeepSeek transport path** — event-stream responses now print live model output in CLI while still persisting final-facing conclusions in markdown/JSON.
